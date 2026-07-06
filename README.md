@@ -32,8 +32,16 @@ simple, fast, and easy to operate. Everything else in AAuth — consent, mission
 resource policy — lives in other roles (Person Server, Access Server, Resource),
 which `apd` never needs to talk to.
 
-See the engineering research notes in [`research/`](research/) for a full,
-detail-level reading of the spec family:
+### Integration guides — "what do I actually build?"
+
+Hands-on, implement-in-order guides for the two sides that establish auth:
+
+- [`docs/guide-ai-agent-auth.md`](docs/guide-ai-agent-auth.md) — **make an AI agent authenticate with AAuth**: keys, enroll, get/refresh a token, sign requests, the resource loop, the Person Server flow, sub-agents, events, and a minimal-viable path.
+- [`docs/guide-mcp-server-auth.md`](docs/guide-mcp-server-auth.md) — **add AAuth auth to an MCP server or any HTTP API**: the adoption ladder (identity → resource-managed → PS-asserted → federated), the verification core, MCP-specific wiring, resource tokens, and trusting Agent Providers.
+
+### Research notes — the spec, distilled
+
+See [`research/`](research/) for a full, detail-level reading of the spec family:
 
 - [`research/01-aauth-protocol-overview.md`](research/01-aauth-protocol-overview.md) — the whole protocol, distilled
 - [`research/02-agent-provider.md`](research/02-agent-provider.md) — the AP role in depth + every design decision here
