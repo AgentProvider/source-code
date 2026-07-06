@@ -1,5 +1,13 @@
 # apd — a self-hostable AAuth Agent Provider
 
+> ⚠️ **Under active development.** AAuth is a set of evolving IETF Internet-Drafts,
+> not a finalized standard. `apd` tracks a specific revision of that spec family
+> (see [Status](#status--license)) and will change — sometimes in
+> backwards-incompatible ways — as the drafts mature. Treat it as a
+> spec-tracking reference implementation: great for building against AAuth today
+> and for interop experiments, but pin a commit and review the changelog before
+> relying on it in production. Feedback and issues welcome.
+
 `apd` is a fast, dependency-light **Agent Provider (AP)** for the
 [AAuth protocol](https://github.com/dickhardt/AAuth) — the role that gives every
 agent a cryptographic identity. It issues **agent tokens** (`aa-agent+jwt`) that
