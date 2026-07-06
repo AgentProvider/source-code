@@ -66,6 +66,15 @@ pub struct Config {
     /// Maximum request body size in bytes.
     #[serde(default = "default_max_body")]
     pub max_body_bytes: usize,
+
+    /// Hosts explicitly admitted as cross-origin JWKS hosts when verifying
+    /// foreign tokens (event deliveries): a resource's metadata may point
+    /// `jwks_uri` at a different host than its issuer (e.g. a CDN). Empty
+    /// (default) means same-origin JWKS only, per the Signature-Key draft's
+    /// requirement that cross-origin JWKS URLs need explicit deployment
+    /// admission. List bare hostnames, e.g. ["jwks.cdn.example"].
+    #[serde(default)]
+    pub jwks_cross_origin_hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

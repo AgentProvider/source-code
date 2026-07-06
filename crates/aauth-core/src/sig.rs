@@ -105,6 +105,10 @@ pub struct ParsedSignature {
     pub covered: Vec<String>,
     pub created: i64,
     pub scheme: SigKeyScheme,
+    /// The `alg` parameter from `Signature-Input`, if the signer included one.
+    /// Optional per RFC 9421; when present it MUST be consistent with the key
+    /// material (checked in [`verify_parsed`]).
+    pub alg: Option<String>,
     /// The exact signature base string to verify.
     pub base: String,
     pub signature: Vec<u8>,
@@ -165,19 +169,20 @@ pub fn parse_request_signature(
     policy: &VerifyPolicy,
 ) -> Result<ParsedSignature, SigError> {
     let get = |h: &str| (parts.header)(h);
+    // AAuth core profile, Verification step 1: if any of the three signature
+    // headers is wholly absent, return `invalid_request` (distinct from
+    // `invalid_signature`, which is for malformed/failed signatures). The AAuth
+    // profile governs here over sigkey §5.4.2.
     let sig_input_hdr = get("signature-input").ok_or_else(|| {
         SigError::new(
-            SigErrorCode::InvalidSignature,
+            SigErrorCode::InvalidRequest,
             "missing Signature-Input header",
         )
     })?;
     let sig_hdr = get("signature")
-        .ok_or_else(|| SigError::new(SigErrorCode::InvalidSignature, "missing Signature header"))?;
+        .ok_or_else(|| SigError::new(SigErrorCode::InvalidRequest, "missing Signature header"))?;
     let sig_key_hdr = get("signature-key").ok_or_else(|| {
-        SigError::new(
-            SigErrorCode::InvalidSignature,
-            "missing Signature-Key header",
-        )
+        SigError::new(SigErrorCode::InvalidRequest, "missing Signature-Key header")
     })?;
 
     let inputs = sfv::parse_dictionary(&sig_input_hdr).map_err(|e| {
@@ -296,6 +301,10 @@ pub fn parse_request_signature(
         }
     };
 
+    let alg = sfv::param(params, "alg")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     let base = build_signature_base(&covered, &input_member.raw, parts)?;
 
     Ok(ParsedSignature {
@@ -303,6 +312,7 @@ pub fn parse_request_signature(
         covered,
         created,
         scheme,
+        alg,
         base,
         signature,
     })
@@ -317,6 +327,17 @@ pub fn verify_parsed(parsed: &ParsedSignature, key: &Jwk) -> Result<(), SigError
         );
         err.required_input = None;
         return Err(err);
+    }
+    // RFC 9421 §6.4 / sigkey draft §6.4: the algorithm is derived from the key,
+    // but if the signer included an `alg` parameter it MUST be consistent with
+    // the key material. Our only key type is Ed25519 → `ed25519`.
+    if let Some(alg) = &parsed.alg {
+        if alg != "ed25519" {
+            return Err(SigError::new(
+                SigErrorCode::UnsupportedAlgorithm,
+                format!("Signature-Input alg '{alg}' is inconsistent with the Ed25519 key"),
+            ));
+        }
     }
     let vk = key
         .verifying_key()
@@ -588,5 +609,57 @@ mod tests {
             .required_input
             .unwrap()
             .contains(&"signature-key".to_string()));
+    }
+
+    #[test]
+    fn missing_signature_headers_are_invalid_request() {
+        // AAuth core profile Verification step 1: absent headers → invalid_request.
+        let lookup = |_: &str| None;
+        let parts = RequestParts {
+            method: "GET",
+            authority: "a.example",
+            path: "/x",
+            query: "",
+            header: &lookup,
+        };
+        let policy = VerifyPolicy {
+            now: 1_750_000_000,
+            window_secs: 60,
+            extra_required: vec![],
+        };
+        let err = parse_request_signature(&parts, &policy).unwrap_err();
+        assert_eq!(err.code, SigErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn alg_consistency_enforced() {
+        let sk = generate_signing_key();
+        let jwk = Jwk::from_verifying_key(&sk.verifying_key());
+        // An `alg` inconsistent with the Ed25519 key is rejected up front,
+        // before signature bytes are even checked.
+        let inconsistent = ParsedSignature {
+            label: "sig".into(),
+            covered: vec![],
+            created: 0,
+            scheme: SigKeyScheme::Hwk(jwk.clone()),
+            alg: Some("ecdsa-p256-sha256".into()),
+            base: "irrelevant".into(),
+            signature: vec![0u8; 64],
+        };
+        assert_eq!(
+            verify_parsed(&inconsistent, &jwk).unwrap_err().code,
+            SigErrorCode::UnsupportedAlgorithm
+        );
+
+        // A consistent `alg` passes the consistency gate and proceeds to the
+        // (here failing) signature check.
+        let consistent = ParsedSignature {
+            alg: Some("ed25519".into()),
+            ..inconsistent
+        };
+        assert_eq!(
+            verify_parsed(&consistent, &jwk).unwrap_err().code,
+            SigErrorCode::InvalidSignature
+        );
     }
 }

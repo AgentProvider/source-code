@@ -25,7 +25,7 @@ pub struct App {
 impl App {
     pub fn new(cfg: Config, keys: KeySet, store: Store) -> Arc<App> {
         let egress = EgressPolicy::from_config(cfg.insecure_dev_mode);
-        let jwks_cache = JwksCache::new(egress.clone());
+        let jwks_cache = JwksCache::new(egress.clone(), cfg.jwks_cross_origin_hosts.clone());
         let agent_metadata_bytes =
             serde_json::to_vec(&build_agent_metadata(&cfg)).expect("serialize metadata");
         let jwks_bytes = serde_json::to_vec(&keys.jwks_json()).expect("serialize jwks");

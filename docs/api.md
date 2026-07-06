@@ -90,10 +90,10 @@ A resource delivers an event. Present the **event token** (`aa-event+jwt`) via
 JWT and the HTTP signature (the `dwk`-without-`cnf` pattern). Optional JSON body
 is the event payload.
 
-Validated in order: `typ`, resource JWKS signature, HTTP signature, subscription
-lookup by `eid`, `iss` == authorized resource, `exp` future, `max_uses`
-(atomic), `aud` == subscribed agent. The event is **durably recorded before**
-`202`.
+Validated in order: `typ`, event-token claims (incl. `exp` in the future),
+resource JWKS signature, HTTP signature, subscription lookup by `eid`, `iss` ==
+authorized resource, `aud` == subscribed agent, then `max_uses` (atomic
+increment). The event is **durably recorded before** `202`.
 
 Response: `202 {"remaining_uses":N}` (present only when `max_uses` was set; `0`
 ⇒ subscription exhausted and cleaned up), else `202 {}`. Errors: `404

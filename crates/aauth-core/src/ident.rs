@@ -37,9 +37,11 @@ fn valid_host(host: &str) -> bool {
 /// Validate an AAuth server identifier: `https` scheme, host only (no port,
 /// path, query, fragment, userinfo, or trailing slash), lowercase.
 ///
-/// With `insecure_dev`, `http://` and an explicit port are additionally
-/// accepted (and `localhost`-style single-label hosts), so a development
-/// deployment can run without TLS. Never enable outside development.
+/// With `insecure_dev`, the `http://` scheme and an explicit port are
+/// additionally accepted, so a development deployment can run without TLS.
+/// Never enable outside development. (Single-label hosts such as `localhost`
+/// satisfy the LDH host rule and are accepted regardless of dev mode; it is the
+/// scheme/port relaxation that dev mode controls.)
 pub fn validate_server_identifier(s: &str, insecure_dev: bool) -> Result<(), IdentError> {
     let rest = if let Some(r) = s.strip_prefix("https://") {
         r

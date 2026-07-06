@@ -221,12 +221,26 @@ pub async fn deliver_event(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiErro
         .get_key(&claims.iss, &claims.dwk, kid)
         .await
         .map_err(ApiError::from_sig_error)?;
-    jwt::verify_with_jwk(&decoded, &resource_key).map_err(|_| {
-        ApiError::from_sig_error(SigError::new(
-            SigErrorCode::InvalidJwt,
-            "event token signature invalid",
-        ))
-    })?;
+    // If a cache-hit key fails verification, the issuer may have silently
+    // re-keyed under the same kid: refresh once (floor-gated) and retry before
+    // rejecting (Signature-Key draft §6.2, SHOULD).
+    let resource_key = match jwt::verify_with_jwk(&decoded, &resource_key) {
+        Ok(()) => resource_key,
+        Err(_) => {
+            let refreshed = app
+                .jwks_cache
+                .refresh_and_get(&claims.iss, &claims.dwk, kid)
+                .await
+                .map_err(ApiError::from_sig_error)?;
+            jwt::verify_with_jwk(&decoded, &refreshed).map_err(|_| {
+                ApiError::from_sig_error(SigError::new(
+                    SigErrorCode::InvalidJwt,
+                    "event token signature invalid",
+                ))
+            })?;
+            refreshed
+        }
+    };
     sig::verify_parsed(&parsed, &resource_key).map_err(ApiError::from_sig_error)?;
 
     // 4. Look up the subscription by eid.
@@ -250,7 +264,11 @@ pub async fn deliver_event(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiErro
         ));
     }
 
-    // 8. aud must match the subscribed agent (checked before mutating counters).
+    // aud must match the subscribed agent. The spec lists this as its last
+    // check (step 8), but we deliberately run it BEFORE the max_uses increment
+    // (spec step 7) so a wrong-agent event never mutates the use counter. The
+    // reorder is safe — none of the checks depend on counter state — and the
+    // "durably record before 202" MUST still holds (recording happens last).
     if subscription.agent_id != claims.aud {
         return Err(ApiError::forbidden(
             "agent_mismatch",
@@ -258,7 +276,7 @@ pub async fn deliver_event(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiErro
         ));
     }
 
-    // 7. max_uses accounting (atomic).
+    // max_uses accounting (atomic).
     let mut remaining_uses: Option<u64> = None;
     if let Some(max) = subscription.max_uses {
         let used = app.store.incr(&sub_uses_key(&claims.eid)).await? as u64;
@@ -319,8 +337,9 @@ pub async fn inbox(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
     };
     let local = AgentId::local_of(&claims.sub);
 
-    // Optional long-poll: honour Prefer: wait=N (capped).
-    let wait = parse_prefer_wait(ctx).min(50);
+    // Optional long-poll: honour `Prefer: wait=N` (RFC 7240) or a `?wait=N`
+    // query parameter, whichever is present (capped).
+    let wait = parse_wait(ctx).min(50);
     let deadline = std::time::Instant::now() + Duration::from_secs(wait);
 
     loop {
@@ -356,13 +375,20 @@ pub async fn inbox(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
     }
 }
 
-fn parse_prefer_wait(ctx: &ReqCtx) -> u64 {
-    ctx.header("prefer")
-        .and_then(|p| {
-            p.split(',')
-                .map(|s| s.trim())
-                .find_map(|s| s.strip_prefix("wait=").and_then(|n| n.parse::<u64>().ok()))
-        })
+fn parse_wait(ctx: &ReqCtx) -> u64 {
+    // Prefer: wait=N (RFC 7240)
+    if let Some(n) = ctx.header("prefer").and_then(|p| {
+        p.split(',')
+            .map(|s| s.trim())
+            .find_map(|s| s.strip_prefix("wait=").and_then(|n| n.parse::<u64>().ok()))
+    }) {
+        return n;
+    }
+    // ?wait=N query parameter (the ergonomic form the agent guides use)
+    ctx.query
+        .trim_start_matches('?')
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("wait=").and_then(|n| n.parse::<u64>().ok()))
         .unwrap_or(0)
 }
 

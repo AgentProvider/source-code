@@ -25,14 +25,18 @@ struct Entry {
 
 pub struct JwksCache {
     policy: EgressPolicy,
+    /// Hosts explicitly admitted as cross-origin JWKS hosts (JWKS host differs
+    /// from the metadata/issuer host). Empty = same-origin only.
+    cross_origin_jwks_hosts: Vec<String>,
     entries: Mutex<HashMap<String, Entry>>,
     last_attempt: Mutex<HashMap<String, Instant>>,
 }
 
 impl JwksCache {
-    pub fn new(policy: EgressPolicy) -> JwksCache {
+    pub fn new(policy: EgressPolicy, cross_origin_jwks_hosts: Vec<String>) -> JwksCache {
         JwksCache {
             policy,
+            cross_origin_jwks_hosts,
             entries: Mutex::new(HashMap::new()),
             last_attempt: Mutex::new(HashMap::new()),
         }
@@ -53,11 +57,29 @@ impl JwksCache {
                 }
             }
         }
-
         // Unknown kid (or no cache): refresh, subject to the per-issuer floor.
+        self.refresh_key(iss, dwk, kid, &cache_key).await
+    }
+
+    /// Force a JWKS refresh and re-resolve `kid`, bypassing the cache-hit
+    /// shortcut but still honoring the once-per-minute floor. Used when a
+    /// cache-hit key fails signature verification (silent re-keying under the
+    /// same `kid`): the Signature-Key draft says SHOULD refresh once and retry.
+    pub async fn refresh_and_get(&self, iss: &str, dwk: &str, kid: &str) -> Result<Jwk, SigError> {
+        let cache_key = format!("{iss}|{dwk}");
+        self.refresh_key(iss, dwk, kid, &cache_key).await
+    }
+
+    async fn refresh_key(
+        &self,
+        iss: &str,
+        dwk: &str,
+        kid: &str,
+        cache_key: &str,
+    ) -> Result<Jwk, SigError> {
         {
             let mut attempts = self.last_attempt.lock().await;
-            if let Some(last) = attempts.get(&cache_key) {
+            if let Some(last) = attempts.get(cache_key) {
                 if last.elapsed() < FETCH_FLOOR {
                     return Err(SigError::new(
                         SigErrorCode::UnknownKey,
@@ -65,13 +87,13 @@ impl JwksCache {
                     ));
                 }
             }
-            attempts.insert(cache_key.clone(), Instant::now());
+            attempts.insert(cache_key.to_string(), Instant::now());
         }
 
         let jwks = self.fetch(iss, dwk).await?;
         let found = jwks.find(kid);
         self.entries.lock().await.insert(
-            cache_key,
+            cache_key.to_string(),
             Entry {
                 jwks,
                 fetched_at: Instant::now(),
@@ -108,6 +130,24 @@ impl JwksCache {
                     format!("no jwks_uri in {meta_url}"),
                 )
             })?;
+        // Cross-origin admission (sigkey draft §6.3): a self-asserted metadata
+        // document could point `jwks_uri` at any public host. Require the JWKS
+        // host to equal the issuer host unless it is explicitly allow-listed.
+        let iss_host = aauth_core::ident::host_of(iss);
+        let jwks_host = aauth_core::ident::host_of(jwks_uri);
+        match (&iss_host, &jwks_host) {
+            (Some(ih), Some(jh)) if ih == jh => {}
+            (_, Some(jh)) if self.cross_origin_jwks_hosts.iter().any(|h| h == jh) => {}
+            _ => {
+                return Err(SigError::new(
+                    SigErrorCode::InvalidKey,
+                    format!(
+                        "jwks_uri host for {iss} is cross-origin and not admitted \
+                         (add it to jwks_cross_origin_hosts to allow)"
+                    ),
+                ));
+            }
+        }
         let jwks_val = httpc::get_json(jwks_uri, &self.policy)
             .await
             .map_err(|e| SigError::new(SigErrorCode::UnknownKey, format!("jwks fetch: {e}")))?;

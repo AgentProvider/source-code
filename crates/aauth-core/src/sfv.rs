@@ -41,9 +41,10 @@ impl BareItem {
 
 pub type Params = Vec<(String, BareItem)>;
 
-/// Look up a parameter by key.
+/// Look up a parameter by key. RFC 8941 §4.2.3.2: on a duplicate parameter
+/// name the last value wins.
 pub fn param<'a>(params: &'a Params, key: &str) -> Option<&'a BareItem> {
-    params.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    params.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -448,5 +449,16 @@ mod tests {
             MemberValue::Item(BareItem::Bool(true), _) => {}
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn duplicate_param_last_wins() {
+        // RFC 8941 §4.2.3.2: last value wins on a duplicate parameter name.
+        let d = parse_dictionary("sig=1;created=100;created=200").unwrap();
+        let params = match &d[0].1.value {
+            MemberValue::Item(_, p) => p,
+            _ => panic!(),
+        };
+        assert_eq!(param(params, "created").unwrap().as_int(), Some(200));
     }
 }

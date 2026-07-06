@@ -249,8 +249,8 @@ Agents can't receive webhooks, so the AP is your inbox:
 2. Register at the resource: signed POST to its subscription endpoint (or a
    ticket URL it gave you), presenting `Signature-Key: sig=jwt;jwt="<subscribe_token>"`
    (the subscribe token replaces the agent token here; its `cnf.jwk` is your key).
-3. Collect events: `GET {AP}/inbox?wait=30` (signed, long-poll) → `{"events":[...]}`,
-   or an SSE stream.
+3. Collect events: `GET {AP}/inbox?wait=30` (signed; `?wait=N` or `Prefer: wait=N`
+   long-polls up to 50 s) → `{"events":[...]}`.
 4. Verify each event token yourself: `typ:aa-event+jwt`, signature via the
    resource's JWKS, `aud` == your agent id, `exp` in the future, dedupe on
    `(iss, eid)`.

@@ -36,7 +36,9 @@ impl ReqCtx {
             .map(|q| format!("?{q}"))
             .unwrap_or_default();
 
-        // @authority: prefer Host header, lowercased.
+        // @authority: prefer Host header, lowercased, with the https default
+        // port stripped so it matches an RFC 9421-conformant signer that
+        // normalizes it away (RFC 9421 §2.2.3).
         let authority = parts
             .headers
             .get("host")
@@ -48,6 +50,7 @@ impl ReqCtx {
                     .authority()
                     .map(|a| a.as_str().to_ascii_lowercase())
             })
+            .map(|a| a.strip_suffix(":443").map(|h| h.to_string()).unwrap_or(a))
             .unwrap_or_default();
 
         let mut headers = Vec::new();

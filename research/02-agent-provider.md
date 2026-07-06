@@ -160,7 +160,8 @@ sub-agent generates its own key pair and hands the public key to the parent out 
   `{eid, agent, resource, max_uses, uses:0, created}`, returns
   `{"subscribe_token": "...", "eid": "..."}`.
 - `GET /inbox` (signed with agent token): poll pending events (workload pattern);
-  `?wait=N` long-poll. Also `GET /inbox/stream` (SSE) for connected agents.
+  `?wait=N` or `Prefer: wait=N` long-polls (capped 50 s). SSE/push streams are
+  valid AP→agent options (events draft) but not implemented here.
 - `POST /events` — the public `event_endpoint` (resource-facing), per §4.
 - `DELETE /subscriptions/{eid}` (signed with agent token) — cancel.
 
@@ -217,5 +218,6 @@ sub-agent generates its own key pair and hands the public key to the parent out 
   with us).
 - Platform attestation verification (App Attest / Play Integrity / WebAuthn) — hooks only.
 - Payment (`402`), missions, consent UI — PS/AS territory.
-- AP-to-agent push (APNs/FCM) — we provide poll + long-poll + SSE inbox primitives;
-  push transports are deployment-specific.
+- AP-to-agent push (APNs/FCM) and SSE/WebSocket streaming — we provide the poll +
+  long-poll inbox primitive; streaming/push transports are deployment-specific and
+  not shipped.

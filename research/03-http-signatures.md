@@ -125,8 +125,10 @@ Accept-Signature.
 `Accept-Signature: sig=("@method" "@authority" "@path");sigkey=uri` — tells a client what
 kind of Signature-Key to bring: `jkt` (pseudonymous: hwk/jkt-jwt), `uri`
 (jwks_uri/jwt/x509-with-URI-SAN), `x509`. Coexists with `WWW-Authenticate`. Useful on
-401/402/429. Our AP returns it on 401s from ceremony endpoints (`sigkey=jkt` for
-enroll/refresh, `sigkey=uri` for token-authenticated endpoints).
+401/402/429. `apd` does **not** emit `Accept-Signature` today — agents already know
+which scheme each ceremony endpoint expects (documented in `docs/api.md`), and a
+signature failure is reported via the `Signature-Error` header. Emitting
+`Accept-Signature` challenges is a possible future addition.
 
 ## 7. RFC 8941 structured fields — the subset we need
 

@@ -51,17 +51,26 @@ POST body (AsyncAPI-schema'd).
 signing key is the JWT's own signing key — resolved from `{iss}/.well-known/{dwk}` by
 header `kid`. One key verifies both the JWT and the HTTP signature.
 
-## 4. AP validation of a delivery (`POST /events`) — normative order
+## 4. AP validation of a delivery (`POST /events`)
+
+The spec lists these checks (draft-events §Event Delivery). `apd` runs them in a
+fail-cheap order that is a safe reordering — no check depends on another's side
+effects, and the "durably record before 202" MUST is preserved. The two
+deliberate deviations from the spec's numbering are noted inline.
 
 1. Extract JWT from `Signature-Key`; `typ == aa-event+jwt`.
-2. Resource JWKS via `{iss}/.well-known/aauth-resource.json` (egress admission! resource
-   URLs are attacker-influencable); verify JWT signature by `kid`.
-3. Verify HTTP signature with the same key (dwk-without-cnf).
-4. Look up subscription by `eid` → else `404`.
-5. `iss` == the subscription's authorized resource (the subscribe token's `aud`) → else `403`.
-6. Event token `exp` in the future.
-7. `max_uses`: **atomic** use-count increment; exceeded → `429`.
-8. `aud` == the subscription's agent identifier.
+2. Validate event-token claims, including **`exp` in the future** (spec step 6,
+   done early here — it's a property of the token, cheap to reject on).
+3. Resource JWKS via `{iss}/.well-known/aauth-resource.json` (egress admission! resource
+   URLs are attacker-influencable); verify JWT signature by `kid` (refresh once on a
+   cache-hit key that fails, for silent re-keying).
+4. Verify HTTP signature with the same key (dwk-without-cnf).
+5. Look up subscription by `eid` → else `404`.
+6. `iss` == the subscription's authorized resource (the subscribe token's `aud`) → else `403`.
+7. `aud` == the subscription's agent identifier → else `403`. **Run before the
+   `max_uses` increment** (reverse of the spec's step 7/8) so a wrong-agent event
+   never mutates the counter.
+8. `max_uses`: **atomic** use-count increment; exceeded → `429`.
 
 Then: **durably record the event before returning `202`** (this is a MUST — a `202` is a
 delivery promise). Response body: `{"remaining_uses": N}` when `max_uses` was set
@@ -70,11 +79,13 @@ Other errors: `400` malformed, `401` HTTP-sig failure.
 
 ## 5. AP → agent delivery (our design; spec leaves it open)
 
-- **Poll / long-poll**: `GET /inbox?wait=N` signed with the agent token. Returns and
+- **Poll / long-poll** (what `apd` ships): `GET /inbox` signed with the agent token,
+  optionally `?wait=N` or `Prefer: wait=N` to long-poll (capped at 50 s). Returns and
   acks pending `{event_token, payload}` pairs for that agent. Durable until fetched.
-- **SSE stream**: `GET /inbox/stream` for connected agents (events also stay in the inbox
-  until acked via poll semantics — stream is a wake-up channel + delivery).
-- Mobile push (APNs/FCM) is out of scope; operators can bridge from the inbox.
+- **SSE / push** (not implemented; the events draft lists them as valid
+  platform-dependent options): a persistent SSE/WebSocket stream, or mobile push
+  (APNs/FCM), could deliver from the same inbox. Operators can bridge these from
+  the poll inbox today.
 
 Agent-side verification (their job, we document it): `typ`, resource JWKS signature,
 `aud` == self, `exp` future, dedupe on `(iss, eid)`, map `eid` → local context.

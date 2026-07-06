@@ -26,6 +26,7 @@ rejected, so typos fail loudly at startup.
 | `events.max_pending_per_agent` | int | `1000` | Inbox cap per agent (oldest dropped). |
 | `events.max_payload_bytes` | int | `65536` | Max event payload accepted at `/events`. |
 | `max_body_bytes` | int | `65536` | Global request-body cap. |
+| `jwks_cross_origin_hosts` | string[] | `[]` | Hosts explicitly admitted as **cross-origin JWKS hosts** when verifying foreign (event) tokens — i.e. a resource whose metadata points `jwks_uri` at a different host than its `issuer` (e.g. a CDN). Empty means same-origin JWKS only, per the Signature-Key draft's requirement that cross-origin JWKS URLs need explicit deployment admission. List bare hostnames, e.g. `["jwks.cdn.example"]`. |
 | `insecure_dev_mode` | bool | `false` | **Dev only.** Allows `http://` issuer + ports, and outbound fetches over http / to private/loopback addresses. Never enable in production. |
 
 ## Storage

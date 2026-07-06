@@ -172,10 +172,10 @@ resource tokens (they get bound to *its* key via `agent_jkt`).
    (protected channel), presenting `Signature-Key: sig=jwt;jwt="<subscribe_token>"`
    (the subscribe token *replaces* the agent token on that request; its `cnf.jwk` is your
    current key, so sign as usual).
-3. Later, the resource POSTs an `aa-event+jwt` to this AP's `/events`. Collect it:
-   - `GET /inbox?wait=30` (signed, long-poll) → `{"events":[{"event_token":"...",
-     "payload":{...}}]}` — acked on delivery, or
-   - `GET /inbox/stream` (SSE) for always-on agents.
+3. Later, the resource POSTs an `aa-event+jwt` to this AP's `/events`. Collect it
+   by polling `GET /inbox?wait=30` (signed; `?wait=N` or `Prefer: wait=N`
+   long-polls up to 50 s) → `{"events":[{"event_token":"...","payload":{...}}]}`,
+   acked on delivery.
 4. Verify each event token yourself before acting: `typ aa-event+jwt`, signature via the
    resource's JWKS, `aud` == your agent id, `exp` future (it's the response deadline),
    dedupe on `(iss, eid)`.
