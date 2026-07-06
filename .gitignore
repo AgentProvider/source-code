@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Local operator secrets & state — never commit
+apd-keys.json
+apd-keys.json.tmp
+apd-state.json
+apd-state.json.tmp
+apd*.json
+!crates/**/*.json
+!package*.json
+
+# Editor / OS
+.DS_Store
+*.swp

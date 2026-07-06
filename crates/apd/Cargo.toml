@@ -1,0 +1,24 @@
+[package]
+name = "apd"
+description = "apd — a self-hostable, multi-instance AAuth Agent Provider daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "apd"
+path = "src/main.rs"
+
+[dependencies]
+aauth-core = { path = "../aauth-core" }
+serde.workspace = true
+serde_json.workspace = true
+ed25519-dalek.workspace = true
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+webpki-roots.workspace = true
