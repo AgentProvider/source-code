@@ -157,8 +157,9 @@ fn run_enroll_token(args: &[String]) -> Result<(), String> {
         if cfg.storage.backend == "memory" {
             return Err(
                 "enroll-token requires a persistent storage backend (file or redis); \
-                        the memory backend is per-process. Configure file/redis storage, or use \
-                        the admin API on a running server instead."
+                        the memory backend is per-process. Configure file/redis storage, use \
+                        the admin API on a running server, or predefine a static token via \
+                        enrollment.static_tokens / APD_STATIC_ENROLL_TOKEN for local development."
                     .to_string(),
             );
         }
@@ -209,6 +210,7 @@ async fn serve(cfg: Config, keys: KeySet) -> Result<(), String> {
     let events_enabled = cfg.events.enabled;
     let backend = cfg.storage.backend.clone();
     let insecure = cfg.insecure_dev_mode;
+    let static_token_count = cfg.enrollment.static_tokens.len();
 
     let app = App::new(cfg, keys, store)?;
 
@@ -246,6 +248,16 @@ async fn serve(cfg: Config, keys: KeySet) -> Result<(), String> {
     );
     if insecure {
         eprintln!("  WARNING:  insecure_dev_mode is ON — do not use in production");
+    }
+    if static_token_count > 0 {
+        eprintln!(
+            "  WARNING:  {static_token_count} static enrollment token(s) configured — reusable \
+             shared credentials for dev/staging; prefer minted or federated enrollment in production"
+        );
+        app.audit.emit(
+            "static_enrollment_tokens_active",
+            serde_json::json!({ "count": static_token_count }),
+        );
     }
 
     let shutdown = tokio::signal::ctrl_c();

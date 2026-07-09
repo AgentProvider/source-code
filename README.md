@@ -146,6 +146,13 @@ JSON
 $BIN serve --config apd.json
 ```
 
+> Tip — want a gate even in dev? Instead of `"mode": "open"`, predefine a
+> reusable **static enrollment token**:
+> `"enrollment": { "methods": ["token"], "static_tokens": [{ "token": "dev-enroll-0123456789" }] }`
+> (or `APD_STATIC_ENROLL_TOKEN=...`), and agents enroll with that known token —
+> handy for docker-compose and CI. See
+> [`docs/configuration.md`](docs/configuration.md).
+
 Then:
 
 ```sh

@@ -1185,3 +1185,86 @@ fn config_compat_and_validation() {
     let example: Config = serde_json::from_str(crate::config::EXAMPLE_CONFIG_FEDERATED).unwrap();
     example.validate().unwrap();
 }
+
+// ------------------------------------------------- static enrollment tokens
+
+#[tokio::test]
+async fn static_enrollment_token() {
+    let json = serde_json::json!({
+        "issuer": "https://ap.example",
+        "storage": { "backend": "memory" },
+        "enrollment": {
+            "methods": ["token"],
+            "static_tokens": [
+                { "token": "dev-enroll-0123456789", "ps": "https://ps.example", "label": "dev" }
+            ]
+        },
+        "admin_token": "test-admin-token",
+        "insecure_dev_mode": true,
+        "events": { "enabled": false }
+    });
+    let cfg: Config = serde_json::from_value(json).unwrap();
+    cfg.validate().unwrap();
+    let app = build_app_with(cfg).await;
+
+    // The SAME static token enrolls multiple distinct agents (reusable).
+    let mut agents = Vec::new();
+    for _ in 0..2 {
+        let durable = generate_signing_key();
+        let durable_jwk = Jwk::from_verifying_key(&durable.verifying_key());
+        let ctx = AgentReq::new(Method::POST, AUTH, "/enroll")
+            .json(serde_json::json!({ "enrollment_token": "dev-enroll-0123456789" }))
+            .into_ctx(&sigkey::serialize_hwk(&durable_jwk), &durable, now_unix());
+        let (status, body) = call(&app, Method::POST, "/enroll", ctx).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        agents.push((durable, body["agent"].as_str().unwrap().to_string()));
+
+        // The static token's ps flows into issued tokens.
+        let (durable_ref, _) = agents.last().unwrap();
+        let ephemeral = generate_signing_key();
+        let token = get_agent_token(&app, durable_ref, &ephemeral, None).await;
+        let decoded = jwt::decode(&token).unwrap();
+        assert_eq!(decoded.payload["ps"], "https://ps.example");
+    }
+    assert_ne!(agents[0].1, agents[1].1, "distinct identities per key");
+
+    // A wrong token is still rejected (no fall-through).
+    let durable = generate_signing_key();
+    let durable_jwk = Jwk::from_verifying_key(&durable.verifying_key());
+    let ctx = AgentReq::new(Method::POST, AUTH, "/enroll")
+        .json(serde_json::json!({ "enrollment_token": "wrong-token-0123456789" }))
+        .into_ctx(&sigkey::serialize_hwk(&durable_jwk), &durable, now_unix());
+    let (status, body) = call(&app, Method::POST, "/enroll", ctx).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "invalid_enrollment_token");
+}
+
+#[test]
+fn static_token_validation() {
+    // Too short is rejected.
+    let short: Config = serde_json::from_value(serde_json::json!({
+        "issuer": "https://ap.example",
+        "enrollment": { "methods": ["token"],
+                        "static_tokens": [{ "token": "short" }] }
+    }))
+    .unwrap();
+    assert!(short.validate().is_err());
+
+    // static_tokens without the token method is rejected.
+    let mismatched: Config = serde_json::from_value(serde_json::json!({
+        "issuer": "https://ap.example",
+        "enrollment": { "methods": ["open"],
+                        "static_tokens": [{ "token": "dev-enroll-0123456789" }] }
+    }))
+    .unwrap();
+    assert!(mismatched.validate().is_err());
+
+    // A valid entry passes.
+    let ok: Config = serde_json::from_value(serde_json::json!({
+        "issuer": "https://ap.example",
+        "enrollment": { "methods": ["token"],
+                        "static_tokens": [{ "token": "dev-enroll-0123456789" }] }
+    }))
+    .unwrap();
+    ok.validate().unwrap();
+}

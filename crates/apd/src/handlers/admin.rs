@@ -11,17 +11,7 @@ use crate::problem::{empty_status, json_ok, json_response, ApiError, Resp};
 use crate::records::*;
 use crate::reqctx::ReqCtx;
 
-/// Constant-time equality for the admin bearer token.
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
+use crate::enrollment::constant_time_eq as ct_eq;
 
 fn authorize(ctx: &ReqCtx, app: &App) -> Result<(), ApiError> {
     let configured = app.cfg.admin_token.as_deref().ok_or_else(|| {

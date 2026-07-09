@@ -18,6 +18,7 @@ rejected, so typos fail loudly at startup.
 | `naming_jwt_max_lifetime_secs` | int | `300` | Max accepted `exp-iat` on two-key refresh naming JWTs; also the replay-guard TTL. |
 | `enrollment.methods` | string[] | `["token"]` | Enabled enrollment gates, any of `token`, `federated`, `allowlist`, `open`. Evaluated per request as assertion → token → allowlist → open; a presented-but-invalid credential never falls through. (Legacy `enrollment.mode` string still accepted.) |
 | `enrollment.trusted_issuers` | object[] | `[]` | Trusted assertion issuers for the `federated` method — OIDC discovery, direct/inline/file JWKS, or `x5c` CA bundles, with audience/claim/SAN/cnf policy and `embed_claims`. Full field reference and per-environment recipes: [`federated-enrollment.md`](federated-enrollment.md). |
+| `enrollment.static_tokens` | object[] | `[]` | Predefined **static enrollment tokens** for the `token` method — `{ "token": "...", "ps"?: url, "label"?: string }`. **Reusable** (unlike minted tokens) and live as long as the config: a dev/staging convenience so agents can enroll with a known token (docker-compose, CI, local runs) without a runtime mint step. ≥16 chars enforced; compared constant-time; presence announced with a startup warning + `static_enrollment_tokens_active` audit event; enrollments audit as `token_kind: "static"`. Prefer minted or federated enrollment in production. |
 | `enrollment.default_ps` | url | — | `ps` bound into tokens when neither the enrollment nor the request sets one. |
 | `admin_token` | string | — | Enables the `/admin` API. Prefer the `APD_ADMIN_TOKEN` env var. |
 | `allow_ps_override` | bool | `true` | Allow a token request to override the enrollment's bound `ps`. |
@@ -53,8 +54,10 @@ rejected, so typos fail loudly at startup.
 
 Applied after the file loads: `APD_ISSUER`, `APD_LISTEN`, `APD_KEYS_FILE`,
 `APD_ADMIN_TOKEN`, `APD_REDIS_ADDR` (setting the last switches the backend to
-redis). Useful for containers and secret injection — keep `admin_token` and
-Redis addresses out of the committed config.
+redis), and `APD_STATIC_ENROLL_TOKEN` (appends one static enrollment token,
+labeled `env` — keeps dev tokens out of committed config files). Useful for
+containers and secret injection — keep `admin_token`, Redis addresses, and
+static tokens out of the committed config.
 
 ## Validation
 

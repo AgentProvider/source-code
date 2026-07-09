@@ -94,7 +94,9 @@ two-key split later — receivers can't tell the difference.
 Obtain whichever credential your AP's enrollment gate expects:
 
 - **Enrollment token** (`token` method) — an operator-minted one-time token
-  (`apd`: `POST /admin/enrollment-tokens` or `apd enroll-token`).
+  (`apd`: `POST /admin/enrollment-tokens` or `apd enroll-token`), or — for
+  local dev/CI — a reusable static token the operator predefined in the AP's
+  config (`enrollment.static_tokens` / `APD_STATIC_ENROLL_TOKEN`).
 - **Enrollment assertion** (`federated` method) — a signed credential your
   platform already gives you, sent as `"enrollment_assertion"` instead: a
   Kubernetes projected ServiceAccount token (audience = the AP), a CI OIDC

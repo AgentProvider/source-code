@@ -37,7 +37,10 @@ Authorization is by any enabled method (`enrollment.methods`), evaluated as:
 presented **assertion** → presented **token** → **allow-list** → **open**; a
 presented-but-invalid credential is a hard `403` (no fall-through).
 
-- `enrollment_token` — single-use admin-minted token, consumed atomically.
+- `enrollment_token` — a single-use admin-minted token (consumed atomically),
+  **or** a reusable static token predefined in config
+  (`enrollment.static_tokens` / `APD_STATIC_ENROLL_TOKEN`) — a dev/staging
+  convenience; compared constant-time and audited as `token_kind: "static"`.
 - `enrollment_assertion` — a JWS/JWT from a configured trusted issuer
   (Kubernetes/CI OIDC token, operator-minted cnf-bound JWT, or an `x5c`
   certificate-chain JWS). See [`federated-enrollment.md`](federated-enrollment.md)

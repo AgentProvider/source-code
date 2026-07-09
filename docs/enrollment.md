@@ -73,7 +73,12 @@ combination; the legacy `mode` field still works):
   **single-use enrollment token** that an operator minted. Whoever mints the
   token has authorized the enrollment. Mint via the admin API
   (`POST /admin/enrollment-tokens`) or the CLI (`apd enroll-token`); a token may
-  pin a `ps`, carry a `label`, and expires.
+  pin a `ps`, carry a `label`, and expires. For **local development / CI**, you
+  can also predefine reusable **static tokens** in config
+  (`enrollment.static_tokens`, or the `APD_STATIC_ENROLL_TOKEN` env var) so
+  agents enroll with a known token without a runtime mint step — a dev
+  convenience with guardrails (≥16 chars, startup warning, audited), not a
+  production pattern.
 - **`federated`** — the agent presents a signed **assertion** from a trusted
   issuer instead of a secret: a Kubernetes/cloud/CI OIDC token, an
   operator-minted key-bound JWT, or a JWS backed by a corporate-CA certificate

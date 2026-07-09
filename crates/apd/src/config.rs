@@ -131,6 +131,29 @@ pub struct EnrollmentConfig {
     /// Trusted assertion issuers for the "federated" method.
     #[serde(default)]
     pub trusted_issuers: Vec<TrustedIssuer>,
+    /// Predefined **static enrollment tokens** for the "token" method — a
+    /// dev/staging convenience so agents can enroll with a known token
+    /// (docker-compose, CI, local runs) without a runtime mint step. Unlike
+    /// minted tokens they are REUSABLE and live as long as the config; treat
+    /// them like any shared dev credential (≥16 chars enforced; a startup
+    /// warning + audit event announce their presence). The
+    /// `APD_STATIC_ENROLL_TOKEN` env var appends one entry.
+    #[serde(default)]
+    pub static_tokens: Vec<StaticEnrollToken>,
+}
+
+/// A predefined static enrollment token (dev/staging convenience).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StaticEnrollToken {
+    /// The token value agents present as `enrollment_token`. Minimum 16 chars.
+    pub token: String,
+    /// PS bound into agent tokens for enrollments made with this token.
+    #[serde(default)]
+    pub ps: Option<String>,
+    /// Label recorded on enrollments made with this token.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 impl EnrollmentConfig {
@@ -327,6 +350,13 @@ impl Config {
             self.storage.backend = "redis".into();
             self.storage.redis_addr = Some(v);
         }
+        if let Ok(v) = std::env::var("APD_STATIC_ENROLL_TOKEN") {
+            self.enrollment.static_tokens.push(StaticEnrollToken {
+                token: v,
+                ps: None,
+                label: Some("env".into()),
+            });
+        }
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -389,6 +419,25 @@ impl Config {
             validate_trusted_issuer(issuer, self.insecure_dev_mode)?;
             if !names.insert(issuer.name.clone()) {
                 return Err(format!("duplicate trusted issuer name '{}'", issuer.name));
+            }
+        }
+        if !self.enrollment.static_tokens.is_empty() && !methods.iter().any(|m| m == "token") {
+            return Err(
+                "enrollment.static_tokens is set but the 'token' method is not enabled".into(),
+            );
+        }
+        for st in &self.enrollment.static_tokens {
+            if st.token.len() < 16 {
+                return Err(
+                    "enrollment.static_tokens entries must be at least 16 characters \
+                     (they are reusable shared credentials — make them unguessable)"
+                        .into(),
+                );
+            }
+            if let Some(ps) = &st.ps {
+                aauth_core::ident::validate_server_identifier(ps, self.insecure_dev_mode).map_err(
+                    |_| "enrollment.static_tokens: ps is not a valid server identifier".to_string(),
+                )?;
             }
         }
         if let Some(ps) = &self.enrollment.default_ps {

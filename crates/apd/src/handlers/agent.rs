@@ -114,13 +114,25 @@ async fn authorize_enrollment(
         return Ok(Authorized::Federated(verdict));
     }
 
-    // 2. Enrollment token.
+    // 2. Enrollment token — a predefined static token (reusable,
+    //    config-defined; dev/staging convenience) or a minted single-use one.
     if let Some(token) = body.get("enrollment_token").and_then(|v| v.as_str()) {
         if !enrollment.method_enabled("token") {
             return Err(ApiError::forbidden(
                 "method_disabled",
                 "token enrollment is not enabled on this provider",
             ));
+        }
+        if let Some(st) = enrollment
+            .static_tokens
+            .iter()
+            .find(|st| crate::enrollment::constant_time_eq(st.token.as_bytes(), token.as_bytes()))
+        {
+            return Ok(Authorized::Token {
+                ps: st.ps.clone(),
+                label: st.label.clone(),
+                static_token: true,
+            });
         }
         let consumed = app.store.take(&enroll_token_key(token)).await?;
         let rec = consumed.ok_or_else(|| {
@@ -138,6 +150,7 @@ async fn authorize_enrollment(
         return Ok(Authorized::Token {
             ps: rec.as_ref().and_then(|r| r.ps.clone()),
             label: rec.and_then(|r| r.label),
+            static_token: false,
         });
     }
 
@@ -239,7 +252,7 @@ pub async fn enroll(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
                     },
                 )
             }
-            Authorized::Token { ps, label } | Authorized::Allowlist { ps, label } => {
+            Authorized::Token { ps, label, .. } | Authorized::Allowlist { ps, label } => {
                 (ps.clone(), label.clone(), None, None, None, None)
             }
             Authorized::Open => (None, None, None, None, None, None),
@@ -292,11 +305,18 @@ pub async fn enroll(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
         .await?;
 
     let agent_id = AgentId::new(&local, &app.cfg.agent_domain()).unwrap();
+    let token_kind = match &authorized {
+        Authorized::Token { static_token, .. } => {
+            Some(if *static_token { "static" } else { "minted" })
+        }
+        _ => None,
+    };
     app.audit.emit(
         "enroll",
         serde_json::json!({
             "agent": agent_id.to_string(),
             "method": authorized.method(),
+            "token_kind": token_kind,
             "issuer": issuer_name,
             "assertion_iss": assertion_iss,
             "subject": subject,
