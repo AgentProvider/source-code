@@ -1,0 +1,245 @@
+---
+layout: home
+title: apd — cryptographic identity for AI agents
+description: apd issues short-lived, signed identities to your AI agents — no API keys, no shared secrets. Self-hostable, multi-arch, verifiable by anyone against a published key set.
+---
+
+<!-- ============================================================ hero -->
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <span class="badge reveal d1"><span class="dot"></span> AAuth Agent Provider · demo</span>
+        <h1 class="reveal d2">Give every AI agent an identity it can&nbsp;<span class="em">prove</span>.</h1>
+        <p class="lede reveal d3">apd issues short-lived, signed identities to your agents — no API keys, no shared secrets. Self-hostable, multi-arch, and verifiable by anyone against a published key set.</p>
+        <div class="hero-actions reveal d4">
+          <a class="btn btn-primary" href="{{ '/docs/deployment.html' | relative_url }}">
+            Install
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </a>
+          <a class="btn btn-ghost" href="{{ '/docs/guide-ai-agent-auth.html' | relative_url }}">Read the docs</a>
+        </div>
+        <div class="hero-meta reveal d5">
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg> Multi-arch image + Helm</span>
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg> Ed25519, proof-of-possession</span>
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg> ~11&nbsp;MB, non-root</span>
+        </div>
+      </div>
+
+      <!-- signature element: a decoded agent identity -->
+      <div class="idcard reveal d3" role="img" aria-label="A decoded AAuth agent token showing a verified identity">
+        <div class="idcard-head">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span class="ttl">aa-agent+jwt · decoded</span>
+        </div>
+        <div class="idcard-body">
+          <div class="label">Agent identity</div>
+          <div class="agentid">aauth:k7q3p9n2<span class="at">@</span>ap.example</div>
+          <dl class="claims">
+            <dt>iss</dt><dd>https://ap.example</dd>
+            <dt>alg</dt><dd>EdDSA (Ed25519)</dd>
+            <dt>cnf.jwk</dt><dd>kPrK_qmxVWaYVA9w…</dd>
+            <dt>exp</dt><dd>+3600s · auto-refresh</dd>
+          </dl>
+          <div class="verified">
+            <span class="check"><svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
+            Signature verified — key bound, not a bearer token
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ install -->
+<section class="section" id="install">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Quickstart</span>
+      <h2>Run it in a minute.</h2>
+      <p>Prebuilt images and an OCI Helm chart ship on every release. Pick your path.</p>
+    </div>
+
+    <div class="install-grid" data-tabs>
+      <div class="tabs" role="tablist" aria-label="Install method">
+        <button class="tab active" data-tab="docker" role="tab">Docker<small>single container</small></button>
+        <button class="tab" data-tab="helm" role="tab">Helm<small>Kubernetes, OCI chart</small></button>
+        <button class="tab" data-tab="cargo" role="tab">From source<small>cargo build</small></button>
+      </div>
+
+      <div class="tab-panels">
+        <div class="tab-panel active" data-panel="docker">
+          <p>Create the signing key once, then serve. The image is distroless and non-root.</p>
+          <div class="code">
+            <div class="code-head"><span class="tag">bash</span><button class="copy" data-copy="cmd-docker" type="button"></button></div>
+<pre id="cmd-docker"><span class="c"># 1 · generate the AP signing key (once)</span>
+<span class="p">$</span> docker run --rm -v "$PWD:/data" \
+    ghcr.io/agentprovider/apd:latest \
+    keygen --keys /data/apd-keys.json
+
+<span class="c"># 2 · run the provider</span>
+<span class="p">$</span> docker run -p 8420:8420 -v "$PWD:/data:ro" \
+    ghcr.io/agentprovider/apd:latest \
+    serve --config /data/apd.json</pre>
+          </div>
+        </div>
+
+        <div class="tab-panel" data-panel="helm">
+          <p>All replicas share the same keys; create the secret, then install the chart from GHCR.</p>
+          <div class="code">
+            <div class="code-head"><span class="tag">bash</span><button class="copy" data-copy="cmd-helm" type="button"></button></div>
+<pre id="cmd-helm"><span class="c"># create the shared signing-key secret</span>
+<span class="p">$</span> kubectl create secret generic apd-keys \
+    --from-file=apd-keys.json
+
+<span class="c"># install the OCI chart</span>
+<span class="p">$</span> helm install apd \
+    oci://ghcr.io/agentprovider/charts/apd \
+    --set issuer=https://ap.example.com \
+    --set keys.existingSecret=apd-keys</pre>
+          </div>
+        </div>
+
+        <div class="tab-panel" data-panel="cargo">
+          <p>Build the single binary yourself — the workspace is dependency-light Rust.</p>
+          <div class="code">
+            <div class="code-head"><span class="tag">bash</span><button class="copy" data-copy="cmd-cargo" type="button"></button></div>
+<pre id="cmd-cargo"><span class="p">$</span> git clone https://github.com/agentprovider/source-code
+<span class="p">$</span> cd source-code &amp;&amp; cargo build --release
+<span class="p">$</span> ./target/release/apd keygen --keys apd-keys.json
+<span class="p">$</span> ./target/release/apd serve --config apd.json</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:26px">
+      <p class="demo-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9l-8 13.9A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3.2l-8-13.9a2 2 0 0 0-3.4 0z"/></svg>
+        <span><b>Demo mode.</b> AAuth is an IETF Internet-Draft, not yet a released standard. apd tracks the drafts and announces this at runtime; pin a version and expect wire changes as the spec matures.</span>
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ features -->
+<section class="section" id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Why apd</span>
+      <h2>API keys, replaced.</h2>
+      <p>The provider is the small, load-bearing piece: it mints identities and publishes the keys to verify them. Everything else is additive.</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 21 2M17 6l2 2M15 8l2 2"/></svg></div>
+        <h3>Secret-free enrollment</h3>
+        <p>Agents enroll with your Kubernetes, CI, or corporate CA — a signed assertion, never a copied secret. OIDC, operator-minted, or X.509/SPIFFE.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 11 4.6-2.5 8-6 8-11V5l-8-3z"/><path d="M9 12l2 2 4-4"/></svg></div>
+        <h3>Proof-of-possession</h3>
+        <p>Every token binds an Ed25519 key via <code>cnf</code>. Each request is signed (RFC 9421); a stolen token is useless without the private key.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/></svg></div>
+        <h3>Ships to production</h3>
+        <p>Multi-arch (amd64 + arm64) image and an OCI Helm chart on every release, plus a rolling <code>edge</code>. ~11&nbsp;MB distroless, non-root.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg></div>
+        <h3>Stateless verification</h3>
+        <p>Relying parties verify against your published JWKS — never a call back to apd. Scale horizontally with Redis-shared state and matching keys.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.5 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.5A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.5z"/></svg></div>
+        <h3>Events inbox</h3>
+        <p>Deliver async events to agents that have no public URL — the provider is their inbox, with cryptographic delivery and no shared secrets.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></div>
+        <h3>Audit trail</h3>
+        <p>Structured JSON for every enrollment decision, denial, issuance, and revocation — to stderr and an optional file. The review trail for automated issuance.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ how it works (a real sequence) -->
+<section class="section" id="how">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">The flow</span>
+      <h2>Enroll once. Sign everything.</h2>
+      <p>Three steps, then the agent operates on its own. The human sets it up and consents to new authority — never a secret in flight.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <span class="flowline"></span>
+        <div class="n">step 1</div>
+        <h3>Enroll</h3>
+        <p>The agent generates a key locally and proves it holds it. apd hands back a stable identity: <code>aauth:local@domain</code>.</p>
+      </div>
+      <div class="step">
+        <span class="flowline"></span>
+        <div class="n">step 2</div>
+        <h3>Issue</h3>
+        <p>apd returns a short-lived token binding that key, refreshed automatically. No refresh secrets, no long-lived credentials.</p>
+      </div>
+      <div class="step">
+        <div class="n">step 3</div>
+        <h3>Sign &amp; verify</h3>
+        <p>The agent signs every request; any resource verifies it against apd's published keys — <span class="accent">no callback, no shared secret.</span></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ docs -->
+<section class="section" id="docs">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Documentation</span>
+      <h2>Build with it.</h2>
+      <p>Hands-on guides for both sides of the exchange, plus operations and the protocol notes behind the code.</p>
+    </div>
+    <div class="doclinks">
+      <a class="doclink" href="{{ '/docs/guide-ai-agent-auth.html' | relative_url }}">
+        <span class="k">for agent developers</span>
+        <h3>Build an agent</h3>
+        <p>Keys, enroll, get a token, sign requests, the resource loop, and the Person Server flow.</p>
+        <span class="go">Open guide <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="{{ '/docs/guide-mcp-server-auth.html' | relative_url }}">
+        <span class="k">for resource / MCP servers</span>
+        <h3>Protect an MCP server</h3>
+        <p>Verify agent identity at the edge, map scopes to tools, and the four-rung adoption ladder.</p>
+        <span class="go">Open guide <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="{{ '/docs/federated-enrollment.html' | relative_url }}">
+        <span class="k">enterprise / dynamic fleets</span>
+        <h3>Federated enrollment</h3>
+        <p>Recipes for EKS/GKE, on-prem Kubernetes, operators, SPIFFE, corporate PKI, and CI OIDC.</p>
+        <span class="go">Open guide <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="{{ '/docs/deployment.html' | relative_url }}">
+        <span class="k">operate</span>
+        <h3>Deploy</h3>
+        <p>TLS, single- and multi-instance topologies, key rotation, the image, the Helm chart, CI/CD.</p>
+        <span class="go">Read <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="{{ '/docs/configuration.html' | relative_url }}">
+        <span class="k">operate</span>
+        <h3>Configuration</h3>
+        <p>Every field, environment overrides, and the storage backends — memory, file, and Redis.</p>
+        <span class="go">Read <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="{{ '/research/01-aauth-protocol-overview.html' | relative_url }}">
+        <span class="k">the protocol</span>
+        <h3>AAuth, distilled</h3>
+        <p>Parties, tokens, the four access modes, HTTP signatures, and events — the notes behind the code.</p>
+        <span class="go">Read <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+    </div>
+  </div>
+</section>

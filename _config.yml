@@ -1,20 +1,16 @@
-# GitHub Pages (Jekyll) configuration for the apd documentation site.
-# Served from the repository root on the default branch: the README is the
-# home page, and everything under docs/ and research/ is browsable. The
-# jekyll-relative-links plugin (enabled by default on GitHub Pages) rewrites
-# [text](file.md) links to their generated URLs, so the same links work in the
-# GitHub repo view and on the published site.
+# GitHub Pages (Jekyll) configuration for agentprovider.dev.
+# Custom design — no external theme. Markdown under docs/ and research/ renders
+# through the `doc` layout; index.html is the landing page.
 
 title: apd — AAuth Agent Provider
 description: >-
-  A fast, dependency-light, self-hostable AAuth Agent Provider in Rust — the
-  role that gives every AI agent a cryptographic identity.
-theme: jekyll-theme-cayman
+  apd issues short-lived, signed cryptographic identities to AI agents — no API
+  keys, no shared secrets. Self-hostable, multi-arch, verifiable by anyone.
 lang: en
+url: https://agentprovider.dev
 
 plugins:
   - jekyll-relative-links
-  - jekyll-readme-index
   - jekyll-seo-tag
   - jekyll-sitemap
 
@@ -22,12 +18,21 @@ relative_links:
   enabled: true
   collections: false
 
-readme_index:
-  with_frontmatter: true
+# Apply the docs chrome (nav + sidebar) to every rendered doc page.
+defaults:
+  - scope:
+      path: "docs"
+    values:
+      layout: doc
+  - scope:
+      path: "research"
+    values:
+      layout: doc
 
-# Keep the published site to prose only — don't render source, build, or
-# licensing files as pages.
+# Keep the published site to the landing + prose docs. Everything below is
+# source, build, or planning material.
 exclude:
+  - README.md
   - Cargo.toml
   - Cargo.lock
   - crates/
@@ -42,6 +47,3 @@ exclude:
   - Gemfile.lock
   - .gitignore
   - vendor/
-
-# GitHub Pages sets `url`/`baseurl` automatically for project sites; leaving
-# them unset lets the same config work for a user/org or project site.

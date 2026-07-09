@@ -1,0 +1,29 @@
+{%- assign u = page.url -%}
+<aside class="sidebar" aria-label="Documentation">
+  <div class="group">
+    <p class="g-title">Get started</p>
+    <a href="{{ '/docs/deployment.html' | relative_url }}" {% if u contains 'deployment' %}class="active"{% endif %}>Install &amp; deploy</a>
+    <a href="{{ '/docs/guide-ai-agent-auth.html' | relative_url }}" {% if u contains 'guide-ai-agent-auth' %}class="active"{% endif %}>Build an agent</a>
+    <a href="{{ '/docs/guide-mcp-server-auth.html' | relative_url }}" {% if u contains 'guide-mcp-server-auth' %}class="active"{% endif %}>Protect an MCP server</a>
+  </div>
+  <div class="group">
+    <p class="g-title">Enrollment</p>
+    <a href="{{ '/docs/enrollment.html' | relative_url }}" {% if u == '/docs/enrollment.html' %}class="active"{% endif %}>Overview &amp; patterns</a>
+    <a href="{{ '/docs/federated-enrollment.html' | relative_url }}" {% if u contains 'federated-enrollment.html' %}class="active"{% endif %}>Federated &amp; workload identity</a>
+    <a href="{{ '/docs/federated-enrollment-design.html' | relative_url }}" {% if u contains 'federated-enrollment-design' %}class="active"{% endif %}>Federated: design</a>
+  </div>
+  <div class="group">
+    <p class="g-title">Operate</p>
+    <a href="{{ '/docs/configuration.html' | relative_url }}" {% if u contains 'configuration' %}class="active"{% endif %}>Configuration</a>
+    <a href="{{ '/docs/api.html' | relative_url }}" {% if u contains 'api.html' %}class="active"{% endif %}>HTTP API</a>
+  </div>
+  <div class="group">
+    <p class="g-title">Protocol notes</p>
+    <a href="{{ '/research/01-aauth-protocol-overview.html' | relative_url }}" {% if u contains '01-aauth' %}class="active"{% endif %}>1 · Protocol overview</a>
+    <a href="{{ '/research/02-agent-provider.html' | relative_url }}" {% if u contains '02-agent' %}class="active"{% endif %}>2 · The Agent Provider</a>
+    <a href="{{ '/research/03-http-signatures.html' | relative_url }}" {% if u contains '03-http' %}class="active"{% endif %}>3 · HTTP signatures</a>
+    <a href="{{ '/research/04-connecting-agents.html' | relative_url }}" {% if u contains '04-connecting' %}class="active"{% endif %}>4 · Connecting agents</a>
+    <a href="{{ '/research/05-connecting-resources-mcp.html' | relative_url }}" {% if u contains '05-connecting' %}class="active"{% endif %}>5 · Resources &amp; MCP</a>
+    <a href="{{ '/research/06-events.html' | relative_url }}" {% if u contains '06-events' %}class="active"{% endif %}>6 · AAuth Events</a>
+  </div>
+</aside>

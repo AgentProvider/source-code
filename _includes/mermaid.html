@@ -1,0 +1,44 @@
+<!-- Mermaid rendering: kramdown emits ```mermaid as div.language-mermaid;
+     normalize to <pre class="mermaid"> and render client-side. Falls back to
+     the raw definition if the CDN is unreachable. -->
+<script type="module">
+  try {
+    const { default: mermaid } = await import(
+      "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
+    );
+    const sources = [];
+    document.querySelectorAll("div.language-mermaid").forEach((div) => {
+      const code = div.querySelector("pre code") || div.querySelector("pre");
+      if (code) sources.push({ container: div, text: code.textContent });
+    });
+    document.querySelectorAll("pre > code.language-mermaid").forEach((code) => {
+      if (!code.closest("div.language-mermaid")) {
+        sources.push({ container: code.closest("pre"), text: code.textContent });
+      }
+    });
+    for (const { container, text } of sources) {
+      const pre = document.createElement("pre");
+      pre.className = "mermaid";
+      pre.textContent = text.trim();
+      container.replaceWith(pre);
+    }
+    const dark = document.documentElement.getAttribute("data-theme") === "dark";
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: '"Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      sequence: { useMaxWidth: true },
+      flowchart: { useMaxWidth: true, curve: "basis" },
+    });
+    await mermaid.run({ querySelector: "pre.mermaid", suppressErrors: true });
+    document
+      .querySelectorAll('pre.mermaid:not([data-processed="true"])')
+      .forEach((pre) => pre.setAttribute("data-mermaid-failed", "true"));
+  } catch (e) {
+    document
+      .querySelectorAll("pre.mermaid, div.language-mermaid")
+      .forEach((el) => el.setAttribute("data-mermaid-failed", "true"));
+    console.warn("mermaid failed to load:", e);
+  }
+</script>
