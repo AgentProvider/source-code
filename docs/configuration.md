@@ -16,7 +16,8 @@ rejected, so typos fail loudly at startup.
 | `subscribe_token_ttl_secs` | int | `86400` | Subscribe-token registration window. |
 | `signature_window_secs` | int | `60` | Allowed skew for the HTTP-signature `created` timestamp. |
 | `naming_jwt_max_lifetime_secs` | int | `300` | Max accepted `exp-iat` on two-key refresh naming JWTs; also the replay-guard TTL. |
-| `enrollment.mode` | string | `token` | `token` (admin-minted single-use tokens) or `open` (any key may enroll). |
+| `enrollment.methods` | string[] | `["token"]` | Enabled enrollment gates, any of `token`, `federated`, `allowlist`, `open`. Evaluated per request as assertion → token → allowlist → open; a presented-but-invalid credential never falls through. (Legacy `enrollment.mode` string still accepted.) |
+| `enrollment.trusted_issuers` | object[] | `[]` | Trusted assertion issuers for the `federated` method — OIDC discovery, direct/inline/file JWKS, or `x5c` CA bundles, with audience/claim/SAN/cnf policy and `embed_claims`. Full field reference and per-environment recipes: [`federated-enrollment.md`](federated-enrollment.md). |
 | `enrollment.default_ps` | url | — | `ps` bound into tokens when neither the enrollment nor the request sets one. |
 | `admin_token` | string | — | Enables the `/admin` API. Prefer the `APD_ADMIN_TOKEN` env var. |
 | `allow_ps_override` | bool | `true` | Allow a token request to override the enrollment's bound `ps`. |
@@ -27,6 +28,7 @@ rejected, so typos fail loudly at startup.
 | `events.max_payload_bytes` | int | `65536` | Max event payload accepted at `/events`. |
 | `max_body_bytes` | int | `65536` | Global request-body cap. |
 | `jwks_cross_origin_hosts` | string[] | `[]` | Hosts explicitly admitted as **cross-origin JWKS hosts** when verifying foreign (event) tokens — i.e. a resource whose metadata points `jwks_uri` at a different host than its `issuer` (e.g. a CDN). Empty means same-origin JWKS only, per the Signature-Key draft's requirement that cross-origin JWKS URLs need explicit deployment admission. List bare hostnames, e.g. `["jwks.cdn.example"]`. |
+| `audit_log_file` | string | — | Append structured JSON audit events (enrollments, denials, issuance, revocation, allowed-key changes) to this file, in addition to stderr. |
 | `insecure_dev_mode` | bool | `false` | **Dev only.** Allows `http://` issuer + ports, and outbound fetches over http / to private/loopback addresses. Never enable in production. |
 
 ## Storage

@@ -27,16 +27,28 @@ The AP's public signing keys (Ed25519 JWKs, `kid`-tagged, active key first).
 Establish an agent identity, keyed by the **durable key** thumbprint.
 Sign with `Signature-Key: sig=hwk;...` (the durable key).
 
-Body: `{ "enrollment_token"?: string, "ps"?: url, "platform"?: string, "label"?: string }`
+Body: `{ "enrollment_token"?: string, "enrollment_assertion"?: string,
+"ps"?: url, "platform"?: string, "label"?: string }`
 
-- `enrollment_token` is **required** in `token` enrollment mode, forbidden-if-absent
-  otherwise; single-use, consumed atomically.
-- `ps` binds a Person Server into future agent tokens (validated server identifier).
-- Re-enrolling the same durable key is idempotent and returns the existing identity.
+Authorization is by any enabled method (`enrollment.methods`), evaluated as:
+presented **assertion** → presented **token** → **allow-list** → **open**; a
+presented-but-invalid credential is a hard `403` (no fall-through).
+
+- `enrollment_token` — single-use admin-minted token, consumed atomically.
+- `enrollment_assertion` — a JWS/JWT from a configured trusted issuer
+  (Kubernetes/CI OIDC token, operator-minted cnf-bound JWT, or an `x5c`
+  certificate-chain JWS). See [`federated-enrollment.md`](federated-enrollment.md)
+  for the format, issuer types, and recipes. Single-use `jti` enforcement
+  applies to non-key-bound assertions by default.
+- `ps` binds a Person Server into future agent tokens (validated server
+  identifier); a federated issuer's `ps` pin is authoritative.
+- Re-enrolling the same durable key is idempotent and returns the existing
+  identity (checked before any credential is consumed).
 
 Responses: `201 {"agent":"aauth:local@domain","status":"enrolled"}` (or
 `200 {..,"status":"existing"}`). Errors: `403 enrollment_required` /
-`invalid_enrollment_token`, `400 invalid_request`, `401` signature errors.
+`invalid_enrollment_token` / `invalid_assertion` / `method_disabled` /
+`ps_mismatch`, `400 invalid_request`, `401` signature errors.
 
 ### `POST /agent-token`
 Issue or refresh an agent token.
@@ -113,11 +125,25 @@ controls). Disabled entirely if no admin token is configured.
 
 - `POST /admin/enrollment-tokens` — `{ "ps"?: url, "label"?: string, "ttl"?: secs }`
   → `201 {"enrollment_token":..,"expires_in":N}` (single-use).
+- `POST /admin/allowed-keys` — `{ "jkt": thumbprint, "ps"?: url, "label"?: string,
+  "ttl"?: secs }` → `201`. Pre-registers a durable-key thumbprint for the
+  `allowlist` enrollment method (consumed on first enrollment).
+- `GET /admin/allowed-keys` → `{ "allowed_keys":[...], "count":N }`.
+- `DELETE /admin/allowed-keys/{jkt}` → `204` (withdraw a pre-registration).
 - `GET /admin/agents` → `{ "agents":[...], "count":N }`.
-- `GET /admin/agents/{local}` → the agent record.
+- `GET /admin/agents/{local}` → the agent record (includes enrollment `method`,
+  federated `issuer`/`subject`, and `embed_claims`).
 - `POST /admin/agents/{local}/revoke` — future token issuance refused
   (existing tokens age out within ≤ their lifetime).
 - `POST /admin/agents/{local}/reinstate`.
+
+## Audit events
+
+Every enrollment decision and issuance is emitted as one JSON line to stderr
+(and `audit_log_file` when configured): `enroll`, `enroll_denied`,
+`agent_token_issued`, `subagent_token_issued`, `agent_revoked`,
+`agent_reinstated`, `enrollment_token_minted`, `allowed_key_added`,
+`allowed_key_removed`.
 
 ## CLI
 
@@ -125,9 +151,11 @@ controls). Disabled entirely if no admin token is configured.
 apd serve [--config apd.json]
 apd keygen [--keys apd-keys.json] [--rotate] [--prune-days N]
 apd enroll-token --config apd.json [--ps https://ps.example] [--ttl 3600]
-apd example-config > apd.json
+apd example-config [--federated] > apd.json
 apd version
 ```
 
 `enroll-token` writes directly to the configured persistent store (file/redis);
 for the memory backend, use `POST /admin/enrollment-tokens` on the running server.
+`example-config --federated` prints a starting point with trusted issuers for
+federated enrollment.

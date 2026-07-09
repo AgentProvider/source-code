@@ -118,18 +118,28 @@ The bootstrap draft explicitly leaves enrollment/refresh endpoints AP-internal. 
 
 ### 5.1 Enrollment — `POST /enroll`
 
-Body: `{"enrollment_token": "...", "ps": "https://ps.example"?, "platform": "..."?}`,
+Body: `{"enrollment_token"?, "enrollment_assertion"?, "ps"?, "platform"?, "label"?}`,
 signed with `sig=hwk` using the **durable key** (proof of possession at enrollment).
 
-- Modes (config): `token` (default — admin mints one-time enrollment tokens; this is the
-  "signed-in account / invitation" stand-in appropriate for self-hosting) or `open`
-  (any key may enroll — local dev, or self-hosted fleets on trusted networks).
-- Effect: consumes the enrollment token (single-use, atomic), assigns `local`, stores
-  `{local, durable_jkt, ps?, platform?, created_at, status: active}`.
-- Response: `201 {"agent": "aauth:local@domain"}`.
-- Attestation (WebAuthn / App Attest / Play Integrity) is optional per the bootstrap
-  draft; we leave a hook (enrollment metadata) but do not implement platform verifiers —
-  consumer APs can front this endpoint with their own checks.
+- Methods (config `enrollment.methods`, composable; evaluated assertion → token →
+  allowlist → open, no fall-through on a presented-but-invalid credential):
+  - `token` (default) — admin mints one-time enrollment tokens; the
+    "signed-in account / invitation" stand-in appropriate for self-hosting.
+  - `federated` — trusted-issuer assertions: Kubernetes/cloud/CI OIDC tokens,
+    operator-minted `cnf`-bound JWTs (static/remote JWKS), or corporate-CA
+    `x5c` chains with SAN policy + CRLs. Secret-free workload identity; claim
+    policy + `embed_claims` stamped into issued tokens. See
+    `docs/federated-enrollment.md` / `docs/federated-enrollment-design.md`.
+  - `allowlist` — orchestrator pre-registers the durable-key thumbprint via the
+    admin API; consumed on first use.
+  - `open` — any key may enroll (local dev, trusted networks).
+- Effect: assigns `local`, stores `{local, durable_jkt, ps?, platform?, label?,
+  method, issuer?, subject?, embed_claims?, created_at, status: active}`.
+- Response: `201 {"agent": "aauth:local@domain"}`; idempotent re-enroll of the
+  same key returns the existing identity before any credential is consumed.
+- Attestation (WebAuthn / App Attest / Play Integrity verdicts) is optional per
+  the bootstrap draft; X.509-rooted hardware attestation rides the `x5c` issuer
+  type, and Apple/Google verdict verification can front the token-mint step.
 
 ### 5.2 Token issuance / refresh — `POST /agent-token`
 

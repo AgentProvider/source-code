@@ -8,7 +8,9 @@
 //!   apd version
 
 mod app;
+mod audit;
 mod config;
+mod enrollment;
 mod handlers;
 mod httpc;
 mod issue;
@@ -40,7 +42,11 @@ fn main() {
         "keygen" => run_keygen(&args),
         "enroll-token" => run_enroll_token(&args),
         "example-config" => {
-            print!("{}", config::EXAMPLE_CONFIG);
+            if has_flag(&args, "--federated") {
+                print!("{}", config::EXAMPLE_CONFIG_FEDERATED);
+            } else {
+                print!("{}", config::EXAMPLE_CONFIG);
+            }
             Ok(())
         }
         "version" | "--version" | "-V" => {
@@ -76,7 +82,7 @@ fn print_help() {
          \x20 apd serve [--config apd.json]\n\
          \x20 apd keygen [--keys apd-keys.json] [--rotate] [--prune-days N]\n\
          \x20 apd enroll-token --config apd.json [--ps https://ps.example] [--ttl 3600]\n\
-         \x20 apd example-config > apd.json\n\
+         \x20 apd example-config [--federated] > apd.json\n\
          \x20 apd version\n\n\
          Environment overrides: APD_ISSUER, APD_LISTEN, APD_KEYS_FILE,\n\
          APD_ADMIN_TOKEN, APD_REDIS_ADDR.",
@@ -169,7 +175,7 @@ async fn serve(cfg: Config, keys: KeySet) -> Result<(), String> {
     let backend = cfg.storage.backend.clone();
     let insecure = cfg.insecure_dev_mode;
 
-    let app = App::new(cfg, keys, store);
+    let app = App::new(cfg, keys, store)?;
 
     let listener = TcpListener::bind(&listen)
         .await

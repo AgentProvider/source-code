@@ -58,12 +58,19 @@ pub(crate) async fn dispatch(
 
         (&Method::POST, "/admin/enrollment-tokens") => admin::mint_enrollment_token(ctx, app).await,
         (&Method::GET, "/admin/agents") => admin::list_agents(ctx, app).await,
+        (&Method::POST, "/admin/allowed-keys") => admin::add_allowed_key(ctx, app).await,
+        (&Method::GET, "/admin/allowed-keys") => admin::list_allowed_keys(ctx, app).await,
 
         _ => {
             // Parameterized routes.
             if let Some(eid) = path.strip_prefix("/subscriptions/") {
                 if method == Method::DELETE && !eid.is_empty() && !eid.contains('/') {
                     return events::cancel_subscription(ctx, app, eid).await;
+                }
+            }
+            if let Some(jkt) = path.strip_prefix("/admin/allowed-keys/") {
+                if method == Method::DELETE && !jkt.is_empty() && !jkt.contains('/') {
+                    return admin::remove_allowed_key(ctx, app, jkt).await;
                 }
             }
             if let Some(rest) = path.strip_prefix("/admin/agents/") {

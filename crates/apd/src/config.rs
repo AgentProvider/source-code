@@ -75,9 +75,14 @@ pub struct Config {
     /// admission. List bare hostnames, e.g. ["jwks.cdn.example"].
     #[serde(default)]
     pub jwks_cross_origin_hosts: Vec<String>,
+
+    /// Append structured JSON audit events (enrollments, issuance, revocation,
+    /// event deliveries) to this file, in addition to stderr.
+    #[serde(default)]
+    pub audit_log_file: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StorageConfig {
     /// "memory" (default), "file", or "redis".
@@ -95,25 +100,121 @@ pub struct StorageConfig {
     pub key_prefix: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl Default for StorageConfig {
+    fn default() -> Self {
+        StorageConfig {
+            backend: default_backend(),
+            path: None,
+            redis_addr: None,
+            key_prefix: default_prefix(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnrollmentConfig {
-    /// "token" (default): enrollment requires a single-use admin-minted
-    /// enrollment token. "open": any key may enroll (dev / trusted networks).
-    #[serde(default = "default_enroll_mode")]
-    pub mode: String,
+    /// Legacy single-method form: "token" or "open". Superseded by `methods`;
+    /// still accepted for backwards compatibility.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Enabled enrollment methods, any of: "token", "federated", "allowlist",
+    /// "open". Default: ["token"] (or the legacy `mode` when set).
+    /// Evaluation order per request: a presented assertion, then a presented
+    /// enrollment token, then the thumbprint allow-list, then open. A
+    /// presented-but-invalid credential is a hard failure (no fall-through).
+    #[serde(default)]
+    pub methods: Option<Vec<String>>,
     /// Default PS bound into agent tokens when the enrollment doesn't set one.
     #[serde(default)]
     pub default_ps: Option<String>,
+    /// Trusted assertion issuers for the "federated" method.
+    #[serde(default)]
+    pub trusted_issuers: Vec<TrustedIssuer>,
 }
 
-impl Default for EnrollmentConfig {
-    fn default() -> Self {
-        EnrollmentConfig {
-            mode: default_enroll_mode(),
-            default_ps: None,
+impl EnrollmentConfig {
+    /// The effective method set (resolves the legacy `mode` field).
+    pub fn effective_methods(&self) -> Vec<String> {
+        if let Some(methods) = &self.methods {
+            return methods.clone();
+        }
+        match self.mode.as_deref() {
+            Some(m) => vec![m.to_string()],
+            None => vec!["token".to_string()],
         }
     }
+
+    pub fn method_enabled(&self, method: &str) -> bool {
+        self.effective_methods().iter().any(|m| m == method)
+    }
+}
+
+/// A trusted issuer of federated enrollment assertions.
+/// See docs/federated-enrollment.md for per-environment recipes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedIssuer {
+    /// Unique operator-chosen name (used in logs/audit).
+    pub name: String,
+    /// Key-resolution type: "oidc" (OIDC discovery), "jwks_uri" (direct JWKS
+    /// URL), "jwks_file" (JWKS loaded from disk), "jwks" (inline JWKS), or
+    /// "x5c" (JWS header certificate chain validated to `ca_bundle_file`).
+    #[serde(rename = "type")]
+    pub issuer_type: String,
+    /// The `iss` value assertions must carry (exact match). For OIDC this is
+    /// the issuer URL (paths allowed, e.g. EKS issuers); for x5c it is an
+    /// operator-chosen identifier the assertion payload must repeat.
+    pub issuer: String,
+    /// Required audience (`aud` must contain it). Default: apd's own issuer URL.
+    #[serde(default)]
+    pub audience: Option<String>,
+    /// Direct JWKS URL ("jwks_uri" type; optional override for "oidc").
+    #[serde(default)]
+    pub jwks_uri: Option<String>,
+    /// Path to a JWKS file ("jwks_file" type). Loaded at startup.
+    #[serde(default)]
+    pub jwks_file: Option<String>,
+    /// Inline JWKS ("jwks" type).
+    #[serde(default)]
+    pub jwks: Option<serde_json::Value>,
+    /// PEM bundle of trusted CA roots ("x5c" type). Loaded at startup.
+    #[serde(default)]
+    pub ca_bundle_file: Option<String>,
+    /// Optional CRL file (PEM or DER, may contain several) for x5c revocation.
+    #[serde(default)]
+    pub crl_file: Option<String>,
+    /// Patterns the leaf certificate's DNS/URI SANs must match (x5c type).
+    /// Exact strings or a trailing `*` prefix wildcard. Any-of semantics.
+    #[serde(default)]
+    pub required_sans: Vec<String>,
+    /// Claim requirements: claim path -> matcher (exact string, array of
+    /// allowed strings, or string with trailing `*` prefix wildcard).
+    #[serde(default)]
+    pub required_claims: serde_json::Map<String, serde_json::Value>,
+    /// Assertion claims copied into every agent token issued for enrollments
+    /// from this issuer: assertion claim path -> agent-token claim name
+    /// (lowercase [a-z0-9_], non-reserved).
+    #[serde(default)]
+    pub embed_claims: serde_json::Map<String, serde_json::Value>,
+    /// Require the assertion to bind the enrolling key via cnf.jwk / cnf.jkt.
+    #[serde(default)]
+    pub require_cnf_binding: bool,
+    /// Enforce single-use `jti`. Default: true when the assertion carries no
+    /// cnf binding (bounds token exfiltration to first use), false when
+    /// cnf-bound (replay is harmless).
+    #[serde(default)]
+    pub single_use_jti: Option<bool>,
+    /// Pin the Person Server for enrollments from this issuer.
+    #[serde(default)]
+    pub ps: Option<String>,
+    /// Label recorded on enrollments from this issuer.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Allow http/private-network egress when fetching THIS issuer's keys
+    /// (on-prem issuers). Explicit per-issuer opt-out of SSRF hardening.
+    #[serde(default)]
+    pub allow_insecure_egress: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -169,9 +270,6 @@ fn default_backend() -> String {
 }
 fn default_prefix() -> String {
     "apd:".into()
-}
-fn default_enroll_mode() -> String {
-    "token".into()
 }
 fn default_agent_token_ttl() -> u64 {
     3600
@@ -263,9 +361,35 @@ impl Config {
             }
             other => return Err(format!("unknown storage backend '{other}'")),
         }
-        match self.enrollment.mode.as_str() {
-            "token" | "open" => {}
-            other => return Err(format!("unknown enrollment mode '{other}'")),
+        let methods = self.enrollment.effective_methods();
+        if methods.is_empty() {
+            return Err("enrollment.methods must not be empty".into());
+        }
+        for m in &methods {
+            match m.as_str() {
+                "token" | "open" | "federated" | "allowlist" => {}
+                other => return Err(format!("unknown enrollment method '{other}'")),
+            }
+        }
+        if methods.iter().any(|m| m == "federated") && self.enrollment.trusted_issuers.is_empty() {
+            return Err(
+                "enrollment method 'federated' requires at least one enrollment.trusted_issuers entry"
+                    .into(),
+            );
+        }
+        if !methods.iter().any(|m| m == "federated") && !self.enrollment.trusted_issuers.is_empty()
+        {
+            return Err(
+                "enrollment.trusted_issuers is set but the 'federated' method is not enabled"
+                    .into(),
+            );
+        }
+        let mut names = std::collections::HashSet::new();
+        for issuer in &self.enrollment.trusted_issuers {
+            validate_trusted_issuer(issuer, self.insecure_dev_mode)?;
+            if !names.insert(issuer.name.clone()) {
+                return Err(format!("duplicate trusted issuer name '{}'", issuer.name));
+            }
         }
         if let Some(ps) = &self.enrollment.default_ps {
             aauth_core::ident::validate_server_identifier(ps, self.insecure_dev_mode).map_err(
@@ -281,6 +405,100 @@ impl Config {
     }
 }
 
+/// Claim names an issuer's `embed_claims` may not target (registered AAuth /
+/// JWT claims the AP controls).
+pub const RESERVED_TOKEN_CLAIMS: [&str; 10] = [
+    "iss", "sub", "aud", "exp", "iat", "nbf", "jti", "cnf", "dwk", "ps",
+];
+
+fn valid_embed_target(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        && !RESERVED_TOKEN_CLAIMS.contains(&name)
+        && name != "parent_agent"
+}
+
+fn validate_trusted_issuer(issuer: &TrustedIssuer, _insecure_dev: bool) -> Result<(), String> {
+    let ctx = format!("trusted issuer '{}'", issuer.name);
+    if issuer.name.is_empty() {
+        return Err("trusted issuer name must not be empty".into());
+    }
+    if issuer.issuer.is_empty() {
+        return Err(format!("{ctx}: issuer must not be empty"));
+    }
+    match issuer.issuer_type.as_str() {
+        "oidc" => {
+            if !issuer.issuer.starts_with("https://")
+                && !(issuer.allow_insecure_egress && issuer.issuer.starts_with("http://"))
+            {
+                return Err(format!(
+                    "{ctx}: oidc issuer must be an https URL \
+                     (or http with allow_insecure_egress)"
+                ));
+            }
+        }
+        "jwks_uri" => {
+            if issuer.jwks_uri.is_none() {
+                return Err(format!("{ctx}: jwks_uri is required for type jwks_uri"));
+            }
+        }
+        "jwks_file" => {
+            if issuer.jwks_file.is_none() {
+                return Err(format!("{ctx}: jwks_file is required for type jwks_file"));
+            }
+        }
+        "jwks" => {
+            if issuer.jwks.is_none() {
+                return Err(format!("{ctx}: inline jwks is required for type jwks"));
+            }
+        }
+        "x5c" => {
+            if issuer.ca_bundle_file.is_none() {
+                return Err(format!("{ctx}: ca_bundle_file is required for type x5c"));
+            }
+        }
+        other => return Err(format!("{ctx}: unknown type '{other}'")),
+    }
+    if !issuer.required_sans.is_empty() && issuer.issuer_type != "x5c" {
+        return Err(format!("{ctx}: required_sans only applies to type x5c"));
+    }
+    for (path, matcher) in &issuer.required_claims {
+        if path.is_empty() {
+            return Err(format!("{ctx}: empty required_claims path"));
+        }
+        let ok = matcher.is_string()
+            || matcher
+                .as_array()
+                .map(|a| !a.is_empty() && a.iter().all(|v| v.is_string()))
+                .unwrap_or(false);
+        if !ok {
+            return Err(format!(
+                "{ctx}: required_claims['{path}'] must be a string or array of strings"
+            ));
+        }
+    }
+    for (path, target) in &issuer.embed_claims {
+        if path.is_empty() {
+            return Err(format!("{ctx}: empty embed_claims path"));
+        }
+        let target = target.as_str().unwrap_or("");
+        if !valid_embed_target(target) {
+            return Err(format!(
+                "{ctx}: embed_claims['{path}'] target '{target}' must be lowercase \
+                 [a-z0-9_], <=64 chars, and not a reserved claim name"
+            ));
+        }
+    }
+    if let Some(ps) = &issuer.ps {
+        aauth_core::ident::validate_server_identifier(ps, _insecure_dev)
+            .map_err(|_| format!("{ctx}: ps is not a valid server identifier"))?;
+    }
+    Ok(())
+}
+
 pub const EXAMPLE_CONFIG: &str = r#"{
   "issuer": "https://ap.example.com",
   "listen": "127.0.0.1:8420",
@@ -289,7 +507,10 @@ pub const EXAMPLE_CONFIG: &str = r#"{
   "agent_token_ttl_secs": 3600,
   "subscribe_token_ttl_secs": 86400,
   "signature_window_secs": 60,
-  "enrollment": { "mode": "token" },
+  "enrollment": {
+    "methods": ["token"],
+    "trusted_issuers": []
+  },
   "allow_ps_override": true,
   "metadata": {
     "name": "Example Agent Provider",
@@ -298,5 +519,47 @@ pub const EXAMPLE_CONFIG: &str = r#"{
   },
   "events": { "enabled": true },
   "insecure_dev_mode": false
+}
+"#;
+
+/// A fuller example enabling federated enrollment (see
+/// docs/federated-enrollment.md for recipes).
+pub const EXAMPLE_CONFIG_FEDERATED: &str = r#"{
+  "issuer": "https://ap.example.com",
+  "listen": "127.0.0.1:8420",
+  "keys_file": "/var/lib/apd/apd-keys.json",
+  "storage": { "backend": "redis", "redis_addr": "127.0.0.1:6379" },
+  "enrollment": {
+    "methods": ["token", "federated", "allowlist"],
+    "trusted_issuers": [
+      {
+        "name": "prod-eks",
+        "type": "oidc",
+        "issuer": "https://oidc.eks.eu-west-1.amazonaws.com/id/EXAMPLE",
+        "audience": "https://ap.example.com",
+        "required_claims": { "sub": "system:serviceaccount:agents:*" },
+        "embed_claims": { "kubernetes.io.namespace": "k8s_namespace" },
+        "label": "eks-prod"
+      },
+      {
+        "name": "agent-operator",
+        "type": "jwks_file",
+        "issuer": "https://operator.internal.example",
+        "jwks_file": "/etc/apd/operator-jwks.json",
+        "require_cnf_binding": true,
+        "embed_claims": { "tenant": "tenant" }
+      },
+      {
+        "name": "corp-ca",
+        "type": "x5c",
+        "issuer": "https://ca.corp.example",
+        "ca_bundle_file": "/etc/apd/corp-roots.pem",
+        "required_sans": ["spiffe://corp.example/ns/agents/*"],
+        "require_cnf_binding": true
+      }
+    ]
+  },
+  "audit_log_file": "/var/log/apd/audit.jsonl",
+  "events": { "enabled": true }
 }
 "#;

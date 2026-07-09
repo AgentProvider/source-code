@@ -46,7 +46,8 @@ Hands-on, implement-in-order guides for the two sides that establish auth:
 
 - [`docs/guide-ai-agent-auth.md`](docs/guide-ai-agent-auth.md) — **make an AI agent authenticate with AAuth**: keys, enroll, get/refresh a token, sign requests, the resource loop, the Person Server flow, sub-agents, events, and a minimal-viable path.
 - [`docs/guide-mcp-server-auth.md`](docs/guide-mcp-server-auth.md) — **add AAuth auth to an MCP server or any HTTP API**: the adoption ladder (identity → resource-managed → PS-asserted → federated), the verification core, MCP-specific wiring, resource tokens, and trusting Agent Providers.
-- [`docs/enrollment.md`](docs/enrollment.md) — **set up enrollment for your users**: what enrollment is, how the spec frames it, apd's hooks, and the patterns for connecting users (invitation, self-service behind your login, IdP group restriction, attested-device, self-hosted).
+- [`docs/enrollment.md`](docs/enrollment.md) — **set up enrollment for your users**: what enrollment is, how the spec frames it, apd's hooks, and the patterns for connecting users (invitation, self-service behind your login, IdP group restriction, federated workload identity, attested-device, self-hosted).
+- [`docs/federated-enrollment.md`](docs/federated-enrollment.md) — **secret-free enrollment for dynamic fleets & enterprises**: trusted-issuer configuration and recipes for EKS/GKE, on-prem Kubernetes, custom operators (cnf-bound), SPIFFE/SPIRE, corporate PKI (`x5c` + CRL + SAN policy), CI OIDC, and the thumbprint allow-list. Design rationale: [`docs/federated-enrollment-design.md`](docs/federated-enrollment-design.md).
 
 ### Research notes — the spec, distilled
 
@@ -64,23 +65,28 @@ See [`research/`](research/) for a full, detail-level reading of the spec family
 | Area | Detail |
 |---|---|
 | **Agent tokens** | `aa-agent+jwt`, Ed25519, `cnf.jwk` bound, `≤24h` (config, default 1h), optional `ps` claim |
-| **Enrollment** | durable-key first-contact; `token` mode (admin-minted single-use tokens) or `open` mode |
+| **Enrollment** | composable gates: `token` (admin-minted single-use tokens), **`federated`** (secret-free workload identity: Kubernetes/CI OIDC, operator-minted cnf-bound assertions, corporate-CA `x5c`/SPIFFE), **`allowlist`** (orchestrator-registered key thumbprints), `open` |
+| **Federated verification** | EdDSA + RS256/RS384/RS512 + ES256/ES384 assertions; OIDC discovery / static JWKS / X.509 chains with CRLs + SAN policy; claim policy with wildcards; `cnf.jwk`/`cnf.jkt` proof-of-possession; `jti` replay guard; `embed_claims` stamped into issued tokens |
 | **Refresh** | two-key (`jkt-jwt` naming JWT, replay-guarded) and single-key (`hwk`) ceremonies |
-| **Sub-agents** | parent-mediated issuance, `parent_agent` claim, single-level-depth enforced, `exp` capped to parent |
+| **Sub-agents** | parent-mediated issuance, `parent_agent` claim, single-level-depth enforced, `exp` capped to parent, inherits embedded claims |
 | **Metadata + JWKS** | `/.well-known/aauth-agent.json`, `/.well-known/jwks.json`, cacheable, key rotation with `kid` |
 | **HTTP signatures** | full RFC 9421 verify per the AAuth profile; `Signature-Error` responses; egress-admitted JWKS discovery |
 | **AAuth Events** | subscribe tokens, resource-facing `/events` delivery endpoint, agent `/inbox` (poll + long-poll) |
-| **Admin API** | mint enrollment tokens, list/inspect/revoke/reinstate agents (bearer-gated, constant-time) |
+| **Admin API** | mint enrollment tokens, manage allowed keys, list/inspect/revoke/reinstate agents (bearer-gated, constant-time) |
+| **Audit** | structured JSON audit events for every enrollment decision, issuance, and revocation (stderr + optional file) |
 | **Storage** | `memory`, `file` (crash-safe snapshot), `redis` (multi-instance; hand-rolled RESP2, no client dep) |
 
 ## Dependencies
 
 Kept intentionally small (see `Cargo.toml`): `ed25519-dalek`, `sha2`,
 `getrandom`, `serde`/`serde_json`, `tokio`, `hyper`/`hyper-util`,
-`rustls`/`webpki-roots` for outbound TLS. No web framework, no JWT library, no
-Redis client, no base64/structured-field crates — the protocol primitives are
-implemented from the RFCs in [`crates/aauth-core`](crates/aauth-core) and unit-tested
-against published test vectors (RFC 8037 keys/signatures, RFC 7638 thumbprints).
+`rustls`/`webpki-roots` for outbound TLS — plus direct references to `ring` and
+`rustls-webpki` (already in the tree via rustls) for federated-enrollment
+RSA/ECDSA verification and X.509 chain validation. No web framework, no JWT
+library, no Redis client, no base64/structured-field crates — the protocol
+primitives are implemented from the RFCs in
+[`crates/aauth-core`](crates/aauth-core) and unit-tested against published test
+vectors (RFC 8037 keys/signatures, RFC 7638 thumbprints, RFC 7515 RS256/ES256).
 
 ## Quick start (local, no TLS)
 

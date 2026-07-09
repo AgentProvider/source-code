@@ -66,26 +66,37 @@ headless and privacy-preserving deployments lean toward "per-install."
 
 ## 3. What `apd` gives you
 
-`apd` implements the **per-install / invitation** flavor and hands you the hook to
-add any auth you like on top:
+`apd` ships four composable enrollment methods (`enrollment.methods`, any
+combination; the legacy `mode` field still works):
 
-- **`enrollment.mode = "token"` (default)** — an agent can only enroll if it
-  presents a **single-use enrollment token** that an operator minted. This is the
-  gate: whoever mints the token has authorized the enrollment.
-  - Mint via the admin API: `POST /admin/enrollment-tokens` (bearer-gated), or the
-    CLI: `apd enroll-token`. A token may pin a `ps` (Person Server) and carry a
-    free-form `label`, and it expires.
-- **`enrollment.mode = "open"`** — any key may enroll, no token. For local dev or
-  a fully-trusted network only.
-- **Admin API** — list, inspect, revoke, and reinstate agents (your management +
-  revocation surface).
+- **`token`** (default) — an agent can only enroll if it presents a
+  **single-use enrollment token** that an operator minted. Whoever mints the
+  token has authorized the enrollment. Mint via the admin API
+  (`POST /admin/enrollment-tokens`) or the CLI (`apd enroll-token`); a token may
+  pin a `ps`, carry a `label`, and expires.
+- **`federated`** — the agent presents a signed **assertion** from a trusted
+  issuer instead of a secret: a Kubernetes/cloud/CI OIDC token, an
+  operator-minted key-bound JWT, or a JWS backed by a corporate-CA certificate
+  chain (`x5c`). **No per-agent secret ever exists.** This is the
+  enterprise/dynamic-fleet path — full reference and per-environment recipes in
+  [`federated-enrollment.md`](federated-enrollment.md).
+- **`allowlist`** — an orchestrator pre-registers the agent's key **thumbprint**
+  via the admin API (`POST /admin/allowed-keys`); the agent then enrolls with
+  only its key. API-driven delegation without assertion signing.
+- **`open`** — any key may enroll. Local dev or fully-trusted networks only.
+
+Plus an **admin API** (list/inspect/revoke/reinstate agents, mint tokens,
+manage allowed keys) and a structured **audit log** of every enrollment
+decision.
 
 `apd` intentionally has **no built-in end-user login** — it stays a minimal
 identity issuer. If you want "user-signed-in" enrollment, you place your login in
-front of the token-minting step (next section).
+front of the token-minting step (next section), or federate via your IdP's
+OIDC tokens.
 
-> The enrollment token is your injection point. Put your authentication and
-> authorization *around the mint call*, not inside the agent's request path.
+> The enrollment token / assertion-issuer trust list is your injection point.
+> Put your authentication and authorization *around the mint or the issuer*,
+> not inside the agent's request path.
 
 ---
 
@@ -135,15 +146,34 @@ token, your backend checks group/role membership against your IdP
 enroll. Add a group claim to issued tokens and an allowlist at your resources for
 defense-in-depth. Good for internal platforms with a restricted user set.
 
-### E. Attested-device (higher assurance)
+### E. Federated / workload identity (dynamic fleets, enterprise) — no secrets at all
+For Kubernetes pods, CI jobs, autoscaled workers, and anything an orchestrator
+spawns: the agent presents a **signed assertion** from a trust anchor apd is
+configured to trust — a Kubernetes/cloud/CI **OIDC token**, an
+**operator-minted key-bound JWT**, or a **corporate-CA certificate chain**
+(`x5c`, incl. SPIFFE SVIDs). apd verifies it cryptographically; no per-agent
+secret ever exists, and matched claims (namespace, tenant, repo, SPIFFE ID) can
+be stamped into the agent's tokens for downstream gating.
+*Gate: your platform's existing workload identity / PKI.* Full recipes:
+[`federated-enrollment.md`](federated-enrollment.md).
+
+### F. Orchestrator pre-registration (`allowlist`)
+The orchestrator registers the agent key's **thumbprint** via apd's admin API
+right after provisioning it; the agent then enrolls with only its key. The
+"credential" is a public-key hash sent over the authenticated admin channel —
+nothing secret travels to the workload. *Gate: your orchestrator's admin
+credential.* Good when signing assertions is more machinery than you want.
+
+### G. Attested-device (higher assurance)
 For mobile or regulated deployments, require a platform attestation
 (WebAuthn / Apple App Attest / Google Play Integrity) as the evidence — proving
 the key lives in a real secure enclave on a genuine device/app before issuing.
-`apd` leaves a hook for this (you verify the attestation in the mint/enroll step);
-it doesn't ship platform verifiers. *Gate: cryptographic device/app integrity.*
+Hardware/vendor attestation chains that are X.509-based can ride the federated
+`x5c` issuer type today; apd doesn't ship Apple/Google verdict verifiers.
+*Gate: cryptographic device/app integrity.*
 
-### F. Open (dev / trusted network)
-`enrollment.mode = "open"` — no gate. Use only where the network itself is the
+### H. Open (dev / trusted network)
+`"methods": ["open"]` — no gate. Use only where the network itself is the
 boundary (localhost, an isolated lab).
 
 ### Comparison
@@ -151,11 +181,13 @@ boundary (localhost, an isolated lab).
 | Pattern | Gate | User login at AP? | Best for |
 |---|---|---|---|
 | A. Self-hosted | you own the machine/domain | n/a | individuals, self-host |
-| B. Invitation | possession of a minted token | no | small known fleets, CI |
+| B. Invitation | possession of a minted token | no | small known fleets |
 | C. Self-service behind login | your existing SSO/OIDC | via your control plane | products with users |
 | D. Group restriction | IdP group membership | via your control plane | internal, restricted set |
-| E. Attested device | device/app attestation | optional | mobile, regulated |
-| F. Open | none | no | dev, trusted network |
+| E. Federated / workload identity | platform OIDC / operator JWT / corporate CA | no (machine identity) | k8s, CI, autoscaled fleets, enterprise PKI |
+| F. Orchestrator pre-registration | admin-registered key thumbprint | no | orchestrators preferring an API call |
+| G. Attested device | device/app attestation | optional | mobile, regulated |
+| H. Open | none | no | dev, trusted network |
 
 ---
 

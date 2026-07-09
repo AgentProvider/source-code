@@ -54,9 +54,13 @@ fn test_keyset() -> (KeySet, SigningKey) {
 
 async fn build_app(issuer: &str, enroll_mode: &str) -> Arc<App> {
     let cfg = test_config(issuer, enroll_mode);
+    build_app_with(cfg).await
+}
+
+async fn build_app_with(cfg: Config) -> Arc<App> {
     let (keys, _) = test_keyset();
     let store = storage::open(&cfg.storage).await.unwrap();
-    App::new(cfg, keys, store)
+    App::new(cfg, keys, store).unwrap()
 }
 
 /// A test agent request: sign with the given Signature-Key value + key.
@@ -595,4 +599,589 @@ async fn events_wrong_resource_rejected() {
 fn b64_dep_is_reachable() {
     // sanity: the crate wiring compiles and b64 is usable
     assert_eq!(b64::encode(b"foo"), "Zm9v");
+}
+
+// =================================================== federated enrollment
+
+/// Build a JWS compact token with an arbitrary JSON header, signed EdDSA.
+fn sign_jws_eddsa(
+    header: serde_json::Value,
+    payload: serde_json::Value,
+    key: &SigningKey,
+) -> String {
+    use ed25519_dalek::Signer;
+    let h = b64::encode(header.to_string().as_bytes());
+    let p = b64::encode(payload.to_string().as_bytes());
+    let input = format!("{h}.{p}");
+    let sig = key.sign(input.as_bytes());
+    format!("{input}.{}", b64::encode(&sig.to_bytes()))
+}
+
+/// Spawn a mock OIDC issuer serving discovery + JWKS for an Ed25519 key.
+async fn spawn_mock_oidc(kid: &str, key: &SigningKey) -> (String, tokio::task::JoinHandle<()>) {
+    use hyper::server::conn::http1;
+    use hyper::service::service_fn;
+    use hyper_util::rt::TokioIo;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let issuer = format!("http://127.0.0.1:{port}");
+
+    let mut jwk = Jwk::from_verifying_key(&key.verifying_key());
+    jwk.kid = Some(kid.to_string());
+    jwk.alg = Some("EdDSA".into());
+    let jwks = serde_json::json!({ "keys": [jwk] }).to_string();
+    let discovery = serde_json::json!({
+        "issuer": issuer,
+        "jwks_uri": format!("{issuer}/jwks.json"),
+    })
+    .to_string();
+
+    let handle = tokio::spawn(async move {
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(p) => p,
+                Err(_) => break,
+            };
+            let jwks = jwks.clone();
+            let discovery = discovery.clone();
+            tokio::spawn(async move {
+                let io = TokioIo::new(stream);
+                let svc = service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                    let jwks = jwks.clone();
+                    let discovery = discovery.clone();
+                    async move {
+                        let body = match req.uri().path() {
+                            "/.well-known/openid-configuration" => discovery,
+                            "/jwks.json" => jwks,
+                            _ => "{}".to_string(),
+                        };
+                        Ok::<_, std::convert::Infallible>(hyper::Response::new(
+                            http_body_util::Full::new(hyper::body::Bytes::from(body)),
+                        ))
+                    }
+                });
+                let _ = http1::Builder::new().serve_connection(io, svc).await;
+            });
+        }
+    });
+    (issuer, handle)
+}
+
+fn federated_config(issuer_entries: serde_json::Value) -> Config {
+    let json = serde_json::json!({
+        "issuer": "https://ap.example",
+        "storage": { "backend": "memory" },
+        "enrollment": {
+            "methods": ["token", "federated", "allowlist"],
+            "trusted_issuers": issuer_entries
+        },
+        "admin_token": "test-admin-token",
+        "insecure_dev_mode": true,
+        "events": { "enabled": false }
+    });
+    let cfg: Config = serde_json::from_value(json).unwrap();
+    cfg.validate().unwrap();
+    cfg
+}
+
+/// Enroll with a federated assertion; returns (status, body).
+async fn enroll_with_assertion(
+    app: &Arc<App>,
+    durable: &SigningKey,
+    assertion: &str,
+) -> (StatusCode, serde_json::Value) {
+    let durable_jwk = Jwk::from_verifying_key(&durable.verifying_key());
+    let ctx = AgentReq::new(Method::POST, AUTH, "/enroll")
+        .json(serde_json::json!({ "enrollment_assertion": assertion }))
+        .into_ctx(&sigkey::serialize_hwk(&durable_jwk), durable, now_unix());
+    call(app, Method::POST, "/enroll", ctx).await
+}
+
+#[tokio::test]
+async fn federated_oidc_end_to_end() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let issuer_key = generate_signing_key();
+    let (oidc_issuer, _srv) = spawn_mock_oidc("op-1", &issuer_key).await;
+
+    let app = build_app_with(federated_config(serde_json::json!([{
+        "name": "test-k8s",
+        "type": "oidc",
+        "issuer": oidc_issuer,
+        "allow_insecure_egress": true,
+        "required_claims": { "sub": "system:serviceaccount:agents:*" },
+        "embed_claims": { "kubernetes.io.namespace": "k8s_namespace" },
+        "label": "k8s"
+    }])))
+    .await;
+
+    // A k8s-projected-SA-token-shaped assertion (RS256 in real life; EdDSA here).
+    let now = now_unix();
+    let assertion = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "typ": "JWT", "kid": "op-1"}),
+        serde_json::json!({
+            "iss": oidc_issuer,
+            "aud": ["https://ap.example"],
+            "sub": "system:serviceaccount:agents:runner",
+            "kubernetes.io": { "namespace": "agents" },
+            "jti": "sa-token-1",
+            "iat": now, "exp": now + 600,
+        }),
+        &issuer_key,
+    );
+
+    let durable = generate_signing_key();
+    let (status, body) = enroll_with_assertion(&app, &durable, &assertion).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let agent_id = body["agent"].as_str().unwrap().to_string();
+
+    // Agent-token issuance stamps the embedded claim.
+    let ephemeral = generate_signing_key();
+    let token = get_agent_token(&app, &durable, &ephemeral, None).await;
+    let decoded = jwt::decode(&token).unwrap();
+    assert_eq!(decoded.payload["k8s_namespace"], "agents");
+    assert_eq!(decoded.payload["sub"], agent_id);
+
+    // Admin listing shows the federated method + issuer + subject.
+    let admin_ctx = ReqCtx {
+        method: "GET".into(),
+        authority: AUTH.into(),
+        path: "/admin/agents".into(),
+        query: String::new(),
+        headers: vec![("authorization".into(), "Bearer test-admin-token".into())],
+        body: Vec::new(),
+    };
+    let (_, listing) = call(&app, Method::GET, "/admin/agents", admin_ctx).await;
+    let entry = &listing["agents"][0];
+    assert_eq!(entry["agent"], agent_id);
+
+    // Replay: the same (non-cnf) assertion with a DIFFERENT key is rejected.
+    let thief = generate_signing_key();
+    let (status, body) = enroll_with_assertion(&app, &thief, &assertion).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "invalid_assertion");
+
+    // But an idempotent retry with the SAME key returns the existing agent.
+    let (status, body) = enroll_with_assertion(&app, &durable, &assertion).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "existing");
+}
+
+#[tokio::test]
+async fn federated_claim_and_aud_policy() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let issuer_key = generate_signing_key();
+    let (oidc_issuer, _srv) = spawn_mock_oidc("op-1", &issuer_key).await;
+
+    let app = build_app_with(federated_config(serde_json::json!([{
+        "name": "test",
+        "type": "oidc",
+        "issuer": oidc_issuer,
+        "allow_insecure_egress": true,
+        "required_claims": { "sub": "system:serviceaccount:agents:*" }
+    }])))
+    .await;
+    let now = now_unix();
+
+    // Wrong namespace in sub → rejected.
+    let bad_sub = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "op-1"}),
+        serde_json::json!({
+            "iss": oidc_issuer, "aud": "https://ap.example",
+            "sub": "system:serviceaccount:evil:runner",
+            "iat": now, "exp": now + 600,
+        }),
+        &issuer_key,
+    );
+    let durable = generate_signing_key();
+    let (status, body) = enroll_with_assertion(&app, &durable, &bad_sub).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // Wrong audience → rejected.
+    let bad_aud = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "op-1"}),
+        serde_json::json!({
+            "iss": oidc_issuer, "aud": "https://other.example",
+            "sub": "system:serviceaccount:agents:runner",
+            "iat": now, "exp": now + 600,
+        }),
+        &issuer_key,
+    );
+    let (status, _) = enroll_with_assertion(&app, &durable, &bad_aud).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Expired → rejected.
+    let expired = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "op-1"}),
+        serde_json::json!({
+            "iss": oidc_issuer, "aud": "https://ap.example",
+            "sub": "system:serviceaccount:agents:runner",
+            "iat": now - 1200, "exp": now - 600,
+        }),
+        &issuer_key,
+    );
+    let (status, _) = enroll_with_assertion(&app, &durable, &expired).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Untrusted issuer → rejected.
+    let foreign = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "op-1"}),
+        serde_json::json!({
+            "iss": "http://unknown.example", "aud": "https://ap.example",
+            "sub": "system:serviceaccount:agents:runner",
+            "iat": now, "exp": now + 600,
+        }),
+        &issuer_key,
+    );
+    let (status, _) = enroll_with_assertion(&app, &durable, &foreign).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn federated_operator_cnf_binding() {
+    // Operator-signed, cnf-bound assertions from a jwks_file issuer.
+    let operator_key = generate_signing_key();
+    let mut op_jwk = Jwk::from_verifying_key(&operator_key.verifying_key());
+    op_jwk.kid = Some("operator-1".into());
+    let jwks_path = format!(
+        "{}/apd-test-operator-{}.json",
+        std::env::temp_dir().display(),
+        aauth_core::rand_id(8)
+    );
+    std::fs::write(
+        &jwks_path,
+        serde_json::json!({ "keys": [op_jwk] }).to_string(),
+    )
+    .unwrap();
+
+    let app = build_app_with(federated_config(serde_json::json!([{
+        "name": "operator",
+        "type": "jwks_file",
+        "issuer": "https://operator.internal",
+        "jwks_file": jwks_path,
+        "require_cnf_binding": true,
+        "embed_claims": { "tenant": "tenant" },
+        "ps": "https://ps.example"
+    }])))
+    .await;
+
+    let durable = generate_signing_key();
+    let durable_jwk = Jwk::from_verifying_key(&durable.verifying_key());
+    let jkt = durable_jwk.thumbprint().unwrap();
+    let now = now_unix();
+
+    // cnf.jkt binds the enrolling key.
+    let assertion = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "operator-1"}),
+        serde_json::json!({
+            "iss": "https://operator.internal",
+            "aud": "https://ap.example",
+            "sub": "pod-7f3c",
+            "tenant": "acme",
+            "cnf": { "jkt": jkt },
+            "iat": now, "exp": now + 300,
+        }),
+        &operator_key,
+    );
+    let (status, body) = enroll_with_assertion(&app, &durable, &assertion).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // The issuer's ps pin flows into issued tokens, as does the tenant claim.
+    let ephemeral = generate_signing_key();
+    let token = get_agent_token(&app, &durable, &ephemeral, None).await;
+    let decoded = jwt::decode(&token).unwrap();
+    assert_eq!(decoded.payload["tenant"], "acme");
+    assert_eq!(decoded.payload["ps"], "https://ps.example");
+
+    // An assertion bound to a DIFFERENT key must be rejected for this key.
+    let other = generate_signing_key();
+    let other_jkt = Jwk::from_verifying_key(&other.verifying_key())
+        .thumbprint()
+        .unwrap();
+    let mismatched = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "operator-1"}),
+        serde_json::json!({
+            "iss": "https://operator.internal",
+            "aud": "https://ap.example",
+            "sub": "pod-9999",
+            "cnf": { "jkt": other_jkt },
+            "iat": now, "exp": now + 300,
+        }),
+        &operator_key,
+    );
+    let fresh = generate_signing_key();
+    let (status, body) = enroll_with_assertion(&app, &fresh, &mismatched).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // Missing cnf entirely violates require_cnf_binding.
+    let unbound = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "operator-1"}),
+        serde_json::json!({
+            "iss": "https://operator.internal",
+            "aud": "https://ap.example",
+            "sub": "pod-0000",
+            "iat": now, "exp": now + 300,
+        }),
+        &operator_key,
+    );
+    let fresh2 = generate_signing_key();
+    let (status, _) = enroll_with_assertion(&app, &fresh2, &unbound).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    std::fs::remove_file(&jwks_path).ok();
+}
+
+#[tokio::test]
+async fn federated_x5c_chain() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    // CA (P-256) and an Ed25519 leaf whose key we control (PKCS#8 import).
+    let ca_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+    let mut ca_params = rcgen::CertificateParams::new(vec![]).unwrap();
+    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+
+    let leaf_signer = generate_signing_key();
+    let mut pkcs8 = Vec::with_capacity(48);
+    pkcs8.extend_from_slice(&[
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+        0x20,
+    ]);
+    pkcs8.extend_from_slice(&leaf_signer.to_bytes());
+    let leaf_key = rcgen::KeyPair::try_from(pkcs8.as_slice()).unwrap();
+
+    let mut leaf_params = rcgen::CertificateParams::new(vec![]).unwrap();
+    leaf_params.subject_alt_names.push(rcgen::SanType::URI(
+        rcgen::Ia5String::try_from("spiffe://corp.example/ns/agents/runner".to_string()).unwrap(),
+    ));
+    leaf_params
+        .extended_key_usages
+        .push(rcgen::ExtendedKeyUsagePurpose::ClientAuth);
+    let leaf_cert = leaf_params.signed_by(&leaf_key, &ca_cert, &ca_key).unwrap();
+
+    let ca_path = format!(
+        "{}/apd-test-ca-{}.pem",
+        std::env::temp_dir().display(),
+        aauth_core::rand_id(8)
+    );
+    std::fs::write(&ca_path, ca_cert.pem()).unwrap();
+
+    let app = build_app_with(federated_config(serde_json::json!([{
+        "name": "corp-ca",
+        "type": "x5c",
+        "issuer": "https://ca.corp.example",
+        "ca_bundle_file": ca_path,
+        "required_sans": ["spiffe://corp.example/ns/agents/*"],
+        "require_cnf_binding": true
+    }])))
+    .await;
+
+    let durable = generate_signing_key();
+    let jkt = Jwk::from_verifying_key(&durable.verifying_key())
+        .thumbprint()
+        .unwrap();
+    let now = now_unix();
+    let leaf_b64_std = b64::encode_std(leaf_cert.der());
+    let assertion = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "x5c": [leaf_b64_std]}),
+        serde_json::json!({
+            "iss": "https://ca.corp.example",
+            "aud": "https://ap.example",
+            "sub": "spiffe://corp.example/ns/agents/runner",
+            "cnf": { "jkt": jkt },
+            "iat": now, "exp": now + 300,
+        }),
+        &leaf_signer,
+    );
+    let (status, body) = enroll_with_assertion(&app, &durable, &assertion).await;
+    assert_eq!(status, StatusCode::CREATED, "x5c enroll failed: {body}");
+
+    // A leaf signed by an UNTRUSTED CA is rejected.
+    let rogue_ca_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+    let mut rogue_params = rcgen::CertificateParams::new(vec![]).unwrap();
+    rogue_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let rogue_ca = rogue_params.self_signed(&rogue_ca_key).unwrap();
+
+    let leaf2_signer = generate_signing_key();
+    let mut pkcs8b = Vec::with_capacity(48);
+    pkcs8b.extend_from_slice(&[
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+        0x20,
+    ]);
+    pkcs8b.extend_from_slice(&leaf2_signer.to_bytes());
+    let leaf2_key = rcgen::KeyPair::try_from(pkcs8b.as_slice()).unwrap();
+    let mut leaf2_params = rcgen::CertificateParams::new(vec![]).unwrap();
+    leaf2_params.subject_alt_names.push(rcgen::SanType::URI(
+        rcgen::Ia5String::try_from("spiffe://corp.example/ns/agents/x".to_string()).unwrap(),
+    ));
+    let leaf2 = leaf2_params
+        .signed_by(&leaf2_key, &rogue_ca, &rogue_ca_key)
+        .unwrap();
+    let durable2 = generate_signing_key();
+    let jkt2 = Jwk::from_verifying_key(&durable2.verifying_key())
+        .thumbprint()
+        .unwrap();
+    let rogue_assertion = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "x5c": [b64::encode_std(leaf2.der())]}),
+        serde_json::json!({
+            "iss": "https://ca.corp.example",
+            "aud": "https://ap.example",
+            "cnf": { "jkt": jkt2 },
+            "iat": now, "exp": now + 300,
+        }),
+        &leaf2_signer,
+    );
+    let (status, body) = enroll_with_assertion(&app, &durable2, &rogue_assertion).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // SAN outside policy is rejected (trusted CA, wrong SPIFFE path).
+    let leaf3_signer = generate_signing_key();
+    let mut pkcs8c = Vec::with_capacity(48);
+    pkcs8c.extend_from_slice(&[
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+        0x20,
+    ]);
+    pkcs8c.extend_from_slice(&leaf3_signer.to_bytes());
+    let leaf3_key = rcgen::KeyPair::try_from(pkcs8c.as_slice()).unwrap();
+    let mut leaf3_params = rcgen::CertificateParams::new(vec![]).unwrap();
+    leaf3_params.subject_alt_names.push(rcgen::SanType::URI(
+        rcgen::Ia5String::try_from("spiffe://corp.example/ns/other/sa".to_string()).unwrap(),
+    ));
+    let leaf3 = leaf3_params
+        .signed_by(&leaf3_key, &ca_cert, &ca_key)
+        .unwrap();
+    let durable3 = generate_signing_key();
+    let jkt3 = Jwk::from_verifying_key(&durable3.verifying_key())
+        .thumbprint()
+        .unwrap();
+    let bad_san = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "x5c": [b64::encode_std(leaf3.der())]}),
+        serde_json::json!({
+            "iss": "https://ca.corp.example",
+            "aud": "https://ap.example",
+            "cnf": { "jkt": jkt3 },
+            "iat": now, "exp": now + 300,
+        }),
+        &leaf3_signer,
+    );
+    let (status, body) = enroll_with_assertion(&app, &durable3, &bad_san).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    std::fs::remove_file(&ca_path).ok();
+}
+
+#[tokio::test]
+async fn allowlist_enrollment() {
+    let app = build_app_with(federated_config(serde_json::json!([{
+        "name": "unused", "type": "jwks", "issuer": "https://unused.example",
+        "jwks": { "keys": [ { "kty": "OKP", "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo", "kid": "k" } ] }
+    }])))
+    .await;
+
+    let durable = generate_signing_key();
+    let durable_jwk = Jwk::from_verifying_key(&durable.verifying_key());
+    let jkt = durable_jwk.thumbprint().unwrap();
+
+    // Without pre-registration: denied (no token, no assertion, no allowlist hit).
+    let ctx = AgentReq::new(Method::POST, AUTH, "/enroll").into_ctx(
+        &sigkey::serialize_hwk(&durable_jwk),
+        &durable,
+        now_unix(),
+    );
+    let (status, _) = call(&app, Method::POST, "/enroll", ctx).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Orchestrator pre-registers the thumbprint via the admin API.
+    let admin_ctx = ReqCtx {
+        method: "POST".into(),
+        authority: AUTH.into(),
+        path: "/admin/allowed-keys".into(),
+        query: String::new(),
+        headers: vec![("authorization".into(), "Bearer test-admin-token".into())],
+        body: serde_json::to_vec(
+            &serde_json::json!({ "jkt": jkt, "ps": "https://ps.example", "label": "orch" }),
+        )
+        .unwrap(),
+    };
+    let (status, body) = call(&app, Method::POST, "/admin/allowed-keys", admin_ctx).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // Now the agent enrolls with only its key.
+    let ctx = AgentReq::new(Method::POST, AUTH, "/enroll").into_ctx(
+        &sigkey::serialize_hwk(&durable_jwk),
+        &durable,
+        now_unix(),
+    );
+    let (status, body) = call(&app, Method::POST, "/enroll", ctx).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // The registration is consumed: a different key cannot ride it.
+    let other = generate_signing_key();
+    let other_jwk = Jwk::from_verifying_key(&other.verifying_key());
+    let ctx = AgentReq::new(Method::POST, AUTH, "/enroll").into_ctx(
+        &sigkey::serialize_hwk(&other_jwk),
+        &other,
+        now_unix(),
+    );
+    let (status, _) = call(&app, Method::POST, "/enroll", ctx).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // The bound ps flows into issued tokens.
+    let ephemeral = generate_signing_key();
+    let token = get_agent_token(&app, &durable, &ephemeral, None).await;
+    let decoded = jwt::decode(&token).unwrap();
+    assert_eq!(decoded.payload["ps"], "https://ps.example");
+}
+
+#[test]
+fn config_compat_and_validation() {
+    // Legacy `mode` still works.
+    let legacy: Config = serde_json::from_value(serde_json::json!({
+        "issuer": "https://ap.example",
+        "enrollment": { "mode": "open" }
+    }))
+    .unwrap();
+    legacy.validate().unwrap();
+    assert!(legacy.enrollment.method_enabled("open"));
+    assert!(!legacy.enrollment.method_enabled("token"));
+
+    // Default is token.
+    let default: Config =
+        serde_json::from_value(serde_json::json!({ "issuer": "https://ap.example" })).unwrap();
+    assert!(default.enrollment.method_enabled("token"));
+
+    // federated without issuers is rejected.
+    let bad: Config = serde_json::from_value(serde_json::json!({
+        "issuer": "https://ap.example",
+        "enrollment": { "methods": ["federated"] }
+    }))
+    .unwrap();
+    assert!(bad.validate().is_err());
+
+    // Unknown method rejected.
+    let bad2: Config = serde_json::from_value(serde_json::json!({
+        "issuer": "https://ap.example",
+        "enrollment": { "methods": ["telepathy"] }
+    }))
+    .unwrap();
+    assert!(bad2.validate().is_err());
+
+    // embed_claims may not target reserved names.
+    let bad3: Config = serde_json::from_value(serde_json::json!({
+        "issuer": "https://ap.example",
+        "enrollment": { "methods": ["federated"], "trusted_issuers": [{
+            "name": "x", "type": "jwks", "issuer": "https://x.example",
+            "jwks": {"keys": []},
+            "embed_claims": { "sub": "sub" }
+        }]}
+    }))
+    .unwrap();
+    assert!(bad3.validate().is_err());
+
+    // The shipped federated example config parses and validates
+    // (issuer file paths are not touched at validate time).
+    let example: Config = serde_json::from_str(crate::config::EXAMPLE_CONFIG_FEDERATED).unwrap();
+    example.validate().unwrap();
 }

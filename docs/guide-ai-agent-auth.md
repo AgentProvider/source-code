@@ -91,9 +91,19 @@ two-key split later — receivers can't tell the difference.
 
 ## 3. Enroll (once per install)
 
-Get an operator-minted enrollment token (in `token` mode) — from your AP's admin
-(`apd`: `POST /admin/enrollment-tokens` or `apd enroll-token`). In `open` mode,
-skip it.
+Obtain whichever credential your AP's enrollment gate expects:
+
+- **Enrollment token** (`token` method) — an operator-minted one-time token
+  (`apd`: `POST /admin/enrollment-tokens` or `apd enroll-token`).
+- **Enrollment assertion** (`federated` method) — a signed credential your
+  platform already gives you, sent as `"enrollment_assertion"` instead: a
+  Kubernetes projected ServiceAccount token (audience = the AP), a CI OIDC
+  token, an operator-minted key-bound JWT, or a corporate-cert `x5c` JWS.
+  **No secret involved.** See
+  [`federated-enrollment.md`](federated-enrollment.md) for exactly what to send
+  per environment.
+- **Nothing** — if the AP pre-registered your key's thumbprint (`allowlist`) or
+  runs `open` mode.
 
 Sign `POST {AP}/enroll` with your **durable key** using the `hwk` scheme:
 
@@ -108,13 +118,15 @@ Signature-Key: sig=hwk;kty="OKP";crv="Ed25519";x="<durable pub>"
 {"enrollment_token":"<one-time>","ps":"https://ps.example","platform":"workload"}
 ```
 
+(or `{"enrollment_assertion":"<JWT>", ...}` for the federated path)
+
 → `201 {"agent":"aauth:k7q3p9n2@ap.example"}`. That `aauth:local@domain` string
 is your stable identity. Store only your durable key — the AP finds you by its
 thumbprint. Set `ps` if you'll use a Person Server for user-scoped auth.
 
-**Checklist — enroll:** ☐ obtain enrollment token (token mode) ☐ sign with
-durable key / `hwk` ☐ record your agent id ☐ include `ps` if you need
-three/four-party auth.
+**Checklist — enroll:** ☐ obtain an enrollment credential (token / platform
+assertion / pre-registration) ☐ sign with durable key / `hwk` ☐ record your
+agent id ☐ include `ps` if you need three/four-party auth.
 
 ## 4. Get an agent token (and refresh it before it expires)
 

@@ -10,6 +10,7 @@ use aauth_core::jwk::Jwk;
 use hyper::StatusCode;
 
 use crate::app::App;
+use crate::enrollment::{verify_assertion, Authorized};
 use crate::issue;
 use crate::problem::{json_ok, json_response, ApiError, Resp};
 use crate::records::*;
@@ -46,14 +47,140 @@ fn resolve_ps(
     }
 }
 
+/// Resolve which enabled enrollment method authorizes this request.
+/// Order: presented assertion → presented token → allow-list → open.
+/// A presented-but-invalid credential is a hard failure (no fall-through).
+async fn authorize_enrollment(
+    app: &Arc<App>,
+    body: &serde_json::Value,
+    durable_jwk: &Jwk,
+    durable_jkt: &str,
+) -> Result<Authorized, ApiError> {
+    let enrollment = &app.cfg.enrollment;
+
+    // 1. Federated assertion.
+    if let Some(assertion) = body.get("enrollment_assertion").and_then(|v| v.as_str()) {
+        if !enrollment.method_enabled("federated") {
+            return Err(ApiError::forbidden(
+                "method_disabled",
+                "federated enrollment is not enabled on this provider",
+            ));
+        }
+        let verdict = verify_assertion(
+            &app.issuers,
+            assertion,
+            durable_jwk,
+            aauth_core::now_unix(),
+            &app.cfg.issuer,
+        )
+        .await
+        .map_err(|reason| {
+            app.audit.emit(
+                "enroll_denied",
+                serde_json::json!({ "method": "federated", "jkt": durable_jkt, "reason": reason }),
+            );
+            ApiError::forbidden("invalid_assertion", reason)
+        })?;
+        // Replay guard for single-use assertions (atomic; storage-backed so it
+        // holds across instances).
+        if let Some((jti, ttl)) = &verdict.consume_jti {
+            let fresh = app
+                .store
+                .put_if_absent(
+                    &assertion_jti_key(jti),
+                    durable_jkt.as_bytes(),
+                    Some(Duration::from_secs(*ttl)),
+                )
+                .await?;
+            if !fresh {
+                // Idempotent retry with the SAME key is fine; a different key
+                // presenting the same jti is a replay.
+                let holder = app.store.get(&assertion_jti_key(jti)).await?;
+                if holder.as_deref() != Some(durable_jkt.as_bytes()) {
+                    app.audit.emit(
+                        "enroll_denied",
+                        serde_json::json!({
+                            "method": "federated", "jkt": durable_jkt,
+                            "reason": "assertion jti replayed with a different key"
+                        }),
+                    );
+                    return Err(ApiError::forbidden(
+                        "invalid_assertion",
+                        "assertion has already been used",
+                    ));
+                }
+            }
+        }
+        return Ok(Authorized::Federated(verdict));
+    }
+
+    // 2. Enrollment token.
+    if let Some(token) = body.get("enrollment_token").and_then(|v| v.as_str()) {
+        if !enrollment.method_enabled("token") {
+            return Err(ApiError::forbidden(
+                "method_disabled",
+                "token enrollment is not enabled on this provider",
+            ));
+        }
+        let consumed = app.store.take(&enroll_token_key(token)).await?;
+        let rec = consumed.ok_or_else(|| {
+            app.audit.emit(
+                "enroll_denied",
+                serde_json::json!({ "method": "token", "jkt": durable_jkt,
+                                    "reason": "unknown, expired, or already-used token" }),
+            );
+            ApiError::forbidden(
+                "invalid_enrollment_token",
+                "enrollment token is unknown, expired, or already used",
+            )
+        })?;
+        let rec: Option<EnrollTokenRecord> = serde_json::from_slice(&rec).ok();
+        return Ok(Authorized::Token {
+            ps: rec.as_ref().and_then(|r| r.ps.clone()),
+            label: rec.and_then(|r| r.label),
+        });
+    }
+
+    // 3. Thumbprint allow-list.
+    if enrollment.method_enabled("allowlist") {
+        if let Some(raw) = app.store.take(&allowed_key_key(durable_jkt)).await? {
+            let rec: Option<AllowedKeyRecord> = serde_json::from_slice(&raw).ok();
+            return Ok(Authorized::Allowlist {
+                ps: rec.as_ref().and_then(|r| r.ps.clone()),
+                label: rec.and_then(|r| r.label),
+            });
+        }
+    }
+
+    // 4. Open.
+    if enrollment.method_enabled("open") {
+        return Ok(Authorized::Open);
+    }
+
+    app.audit.emit(
+        "enroll_denied",
+        serde_json::json!({ "method": "none", "jkt": durable_jkt,
+                            "reason": "no credential presented and no permissive method enabled" }),
+    );
+    Err(ApiError::forbidden(
+        "enrollment_required",
+        "an enrollment_token or enrollment_assertion is required",
+    ))
+}
+
 /// `POST /enroll` — establish an agent identity, keyed by the durable key
-/// thumbprint. Signed with `hwk` (the durable key).
+/// thumbprint. Signed with `hwk` (the durable key). Authorization is by any
+/// enabled method: a federated assertion, an enrollment token, the key
+/// allow-list, or open mode.
 pub async fn enroll(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
     let signer = verify_signature(ctx, app, &[]).await?;
-    let durable_jkt = match &signer {
-        Signer::Hwk { jwk } => jwk
-            .thumbprint()
-            .map_err(|_| ApiError::bad_request("invalid_key", "unsupported durable key"))?,
+    let (durable_jwk, durable_jkt) = match &signer {
+        Signer::Hwk { jwk } => {
+            let jkt = jwk
+                .thumbprint()
+                .map_err(|_| ApiError::bad_request("invalid_key", "unsupported durable key"))?;
+            (jwk.clone(), jkt)
+        }
         _ => {
             return Err(ApiError::bad_request(
                 "invalid_request",
@@ -68,34 +195,13 @@ pub async fn enroll(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
         .get("platform")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let label = body
+    let body_label = body
         .get("label")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Enrollment authorization
-    let mut enrollment_ps: Option<String> = None;
-    if app.cfg.enrollment.mode == "token" {
-        let token = body
-            .get("enrollment_token")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ApiError::forbidden("enrollment_required", "an enrollment_token is required")
-            })?;
-        let consumed = app.store.take(&enroll_token_key(token)).await?;
-        let rec = consumed.ok_or_else(|| {
-            ApiError::forbidden(
-                "invalid_enrollment_token",
-                "enrollment token is unknown, expired, or already used",
-            )
-        })?;
-        if let Ok(rec) = serde_json::from_slice::<EnrollTokenRecord>(&rec) {
-            enrollment_ps = rec.ps;
-        }
-    }
-
     // If this durable key already enrolled, return the existing identity
-    // (idempotent enrollment) rather than minting a duplicate.
+    // (idempotent enrollment) BEFORE consuming any credential.
     if let Some(existing_local) = app.store.get(&jkt_key(&durable_jkt)).await? {
         let local = String::from_utf8_lossy(&existing_local).to_string();
         let agent_id = AgentId::new(&local, &app.cfg.agent_domain()).unwrap();
@@ -105,7 +211,42 @@ pub async fn enroll(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
         ));
     }
 
-    let ps = resolve_ps(app, enrollment_ps.as_deref(), ps_req)?;
+    let authorized = authorize_enrollment(app, &body, &durable_jwk, &durable_jkt).await?;
+
+    // Resolve PS / label / federated metadata from the authorizing method.
+    let (bound_ps, bound_label, issuer_name, assertion_iss, subject, embed_claims) =
+        match &authorized {
+            Authorized::Federated(v) => {
+                // An issuer PS pin is authoritative: a conflicting request is an error.
+                if let (Some(pin), Some(req)) = (&v.ps_pin, ps_req) {
+                    if pin != req {
+                        return Err(ApiError::forbidden(
+                            "ps_mismatch",
+                            "this issuer pins the Person Server; the requested ps conflicts",
+                        ));
+                    }
+                }
+                (
+                    v.ps_pin.clone(),
+                    v.label.clone(),
+                    Some(v.issuer_name.clone()),
+                    Some(v.issuer.clone()),
+                    v.subject.clone(),
+                    if v.embed.is_empty() {
+                        None
+                    } else {
+                        Some(v.embed.clone())
+                    },
+                )
+            }
+            Authorized::Token { ps, label } | Authorized::Allowlist { ps, label } => {
+                (ps.clone(), label.clone(), None, None, None, None)
+            }
+            Authorized::Open => (None, None, None, None, None, None),
+        };
+
+    let ps = resolve_ps(app, bound_ps.as_deref(), ps_req)?;
+    let label = bound_label.or(body_label);
 
     // Allocate a unique local part.
     let mut local = aauth_core::rand_id(16);
@@ -134,6 +275,10 @@ pub async fn enroll(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
         status: STATUS_ACTIVE.into(),
         last_issued_at: 0,
         tokens_issued: 0,
+        method: authorized.method().to_string(),
+        issuer: issuer_name.clone(),
+        subject: subject.clone(),
+        embed_claims,
     };
     app.store
         .put(
@@ -147,6 +292,18 @@ pub async fn enroll(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
         .await?;
 
     let agent_id = AgentId::new(&local, &app.cfg.agent_domain()).unwrap();
+    app.audit.emit(
+        "enroll",
+        serde_json::json!({
+            "agent": agent_id.to_string(),
+            "method": authorized.method(),
+            "issuer": issuer_name,
+            "assertion_iss": assertion_iss,
+            "subject": subject,
+            "jkt": durable_jkt,
+            "ps": ps,
+        }),
+    );
     Ok(json_response(
         StatusCode::CREATED,
         &serde_json::json!({ "agent": agent_id.to_string(), "status": "enrolled" }),
@@ -226,6 +383,7 @@ pub async fn agent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError>
         &ephemeral_jwk,
         ps.as_deref(),
         app.cfg.agent_token_ttl_secs,
+        record.embed_claims.as_ref(),
     );
 
     // Best-effort issuance accounting.
@@ -244,6 +402,10 @@ pub async fn agent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError>
         .await;
 
     let agent_id = AgentId::new(&record.local, &app.cfg.agent_domain()).unwrap();
+    app.audit.emit(
+        "agent_token_issued",
+        serde_json::json!({ "agent": agent_id.to_string(), "jkt": durable_jkt }),
+    );
     Ok(json_ok(&serde_json::json!({
         "agent_token": token,
         "token_type": "aa-agent+jwt",
@@ -305,6 +467,14 @@ pub async fn subagent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiErr
         .verifying_key()
         .map_err(|_| ApiError::bad_request("invalid_key", "cnf_jwk is not a usable Ed25519 key"))?;
 
+    // Sub-agents inherit the parent enrollment's embedded claims.
+    let parent_embed = app
+        .store
+        .get(&agent_key(&parent.local))
+        .await?
+        .and_then(|raw| serde_json::from_slice::<AgentRecord>(&raw).ok())
+        .and_then(|r| r.embed_claims);
+
     let (token, exp) = issue::subagent_token(
         app,
         &parent,
@@ -312,10 +482,15 @@ pub async fn subagent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiErr
         &cnf_jwk,
         parent_claims.ps.as_deref(),
         parent_claims.exp,
+        parent_embed.as_ref(),
     )
     .map_err(|e| ApiError::bad_request("invalid_request", e))?;
 
     let sub_id = parent.subagent(discriminator).unwrap();
+    app.audit.emit(
+        "subagent_token_issued",
+        serde_json::json!({ "agent": sub_id.to_string(), "parent": parent.to_string() }),
+    );
     Ok(json_ok(&serde_json::json!({
         "agent_token": token,
         "token_type": "aa-agent+jwt",

@@ -33,10 +33,40 @@ pub struct AgentRecord {
     /// Count of agent tokens issued.
     #[serde(default)]
     pub tokens_issued: u64,
+    /// How the enrollment was authorized: "token" | "federated" | "allowlist" | "open".
+    #[serde(default = "default_method")]
+    pub method: String,
+    /// Trusted-issuer name (federated enrollments).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
+    /// Assertion subject (federated enrollments), for audit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// Claims stamped into every agent token issued for this enrollment
+    /// (from the issuer's embed_claims policy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed_claims: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+fn default_method() -> String {
+    "token".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrollTokenRecord {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ps: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub created_at: u64,
+}
+
+/// A pre-registered durable-key thumbprint (the `allowlist` enrollment
+/// method): an orchestrator registers the key it provisioned via the admin
+/// API; the agent then enrolls with only that key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AllowedKeyRecord {
+    pub jkt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ps: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,6 +105,12 @@ pub fn jkt_key(jkt: &str) -> String {
 }
 pub fn enroll_token_key(token: &str) -> String {
     format!("enrolltok:{token}")
+}
+pub fn allowed_key_key(jkt: &str) -> String {
+    format!("allowkey:{jkt}")
+}
+pub fn assertion_jti_key(jti: &str) -> String {
+    format!("ajti:{jti}")
 }
 pub fn jti_key(jti: &str) -> String {
     format!("jti:{jti}")

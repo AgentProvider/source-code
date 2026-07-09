@@ -20,6 +20,10 @@ pub struct JoseHeader {
     /// Embedded public key — used by the `jkt-jwt` naming JWT.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwk: Option<Jwk>,
+    /// X.509 certificate chain (RFC 7515 §4.1.6): standard base64 DER,
+    /// leaf first — used by x5c-type federated enrollment assertions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x5c: Option<Vec<String>>,
 }
 
 /// A decoded-but-not-yet-verified JWT.
@@ -105,6 +109,7 @@ pub fn sign(
         typ: Some(typ.into()),
         kid: kid.map(|s| s.into()),
         jwk: header_jwk.cloned(),
+        x5c: None,
     };
     let h = b64::encode(serde_json::to_string(&header).unwrap().as_bytes());
     let p = b64::encode(serde_json::to_string(payload).unwrap().as_bytes());

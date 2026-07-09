@@ -8,13 +8,33 @@ use aauth_core::now_unix;
 
 use crate::app::App;
 
-/// Mint an agent token for `local`, bound to `signing_jwk`.
+/// Claims that may never be overridden by issuer `embed_claims`
+/// (defense-in-depth; also validated at config load).
+const PROTECTED: [&str; 11] = [
+    "iss",
+    "sub",
+    "aud",
+    "exp",
+    "iat",
+    "nbf",
+    "jti",
+    "cnf",
+    "dwk",
+    "ps",
+    "parent_agent",
+];
+
+/// Mint an agent token for `local`, bound to `signing_jwk`. `embed_claims`
+/// (from a federated enrollment's issuer policy) are stamped as additional
+/// AP-attested claims — the AAuth spec permits AP-defined claims and requires
+/// receivers to ignore unrecognized ones.
 pub fn agent_token(
     app: &App,
     local: &str,
     signing_jwk: &Jwk,
     ps: Option<&str>,
     ttl_secs: u64,
+    embed_claims: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> (String, u64) {
     let now = now_unix();
     let exp = now + ttl_secs;
@@ -32,6 +52,13 @@ pub fn agent_token(
     });
     if let Some(ps) = ps {
         payload["ps"] = ps.into();
+    }
+    if let Some(embed) = embed_claims {
+        for (name, value) in embed {
+            if !PROTECTED.contains(&name.as_str()) {
+                payload[name] = value.clone();
+            }
+        }
     }
     let token = jwt::sign(
         aauth_core::tokens::TYP_AGENT,
@@ -52,6 +79,7 @@ pub fn subagent_token(
     signing_jwk: &Jwk,
     ps: Option<&str>,
     parent_exp: u64,
+    embed_claims: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Result<(String, u64), String> {
     let sub_id = parent
         .subagent(discriminator)
@@ -74,6 +102,15 @@ pub fn subagent_token(
     });
     if let Some(ps) = ps {
         payload["ps"] = ps.into();
+    }
+    // Sub-agents inherit the parent enrollment's embedded claims so
+    // downstream gating (tenant/group/namespace) applies to workers too.
+    if let Some(embed) = embed_claims {
+        for (name, value) in embed {
+            if !PROTECTED.contains(&name.as_str()) {
+                payload[name] = value.clone();
+            }
+        }
     }
     let token = jwt::sign(
         aauth_core::tokens::TYP_AGENT,
