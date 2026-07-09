@@ -152,12 +152,67 @@ WantedBy=multi-user.target
 
 (Point `keys_file`/`storage.path` at `/var/lib/apd` = the `StateDirectory`.)
 
-## Container
+## Container image
 
-`apd` is a static-ish binary; a distroless or `scratch`+glibc image works. Build
-`--release`, copy the binary, ship the config via a mounted file + env secrets,
-expose the `listen` port, and terminate TLS at the ingress. Health-check
-`GET /healthz`.
+Prebuilt **multi-arch** images (linux/amd64, linux/arm64) are published to GHCR
+on every release, plus a rolling `edge` from `main`:
+
+```sh
+docker pull ghcr.io/agentprovider/apd:latest      # newest release
+docker pull ghcr.io/agentprovider/apd:0.1.0       # pinned version
+docker pull ghcr.io/agentprovider/apd:edge        # tip of main
+```
+
+The runtime image is distroless/cc — no shell, non-root (uid 65532), ~11 MB, no
+OpenSSL (TLS is rustls). It has no writable filesystem by default, so point
+`keys_file`/config at mounted paths and run with a read-only root FS. Example:
+
+```sh
+docker run --rm -v "$PWD:/data" ghcr.io/agentprovider/apd:latest \
+  keygen --keys /data/apd-keys.json
+docker run -p 8420:8420 -v "$PWD:/data:ro" \
+  -e APD_ADMIN_TOKEN="$(openssl rand -hex 32)" \
+  ghcr.io/agentprovider/apd:latest serve --config /data/apd.json
+```
+
+Build it yourself: `docker buildx build --platform linux/amd64,linux/arm64 .`
+(`Dockerfile` at the repo root). Health-check `GET /healthz`.
+
+## Kubernetes (Helm)
+
+An OCI Helm chart is published alongside the image. Signing keys must be created
+once and shared by all replicas (the chart never auto-generates them):
+
+```sh
+apd keygen --keys apd-keys.json
+kubectl create namespace apd
+kubectl -n apd create secret generic apd-keys --from-file=apd-keys.json
+
+helm install apd oci://ghcr.io/agentprovider/charts/apd \
+  --namespace apd \
+  --set issuer=https://ap.example.com \
+  --set keys.existingSecret=apd-keys \
+  --set ingress.enabled=true --set ingress.host=ap.example.com
+```
+
+For **multi-instance** set `replicaCount`/`autoscaling` with
+`storage.backend=redis` and an external Redis — the chart enforces the shared
+Redis + shared-keys invariants at render time. Federated enrollment issuers go
+under `extraConfig.enrollment.trusted_issuers`. Full chart reference:
+[`charts/apd/README.md`](https://github.com/agentprovider/source-code/tree/main/charts/apd).
+
+## CI/CD
+
+GitHub Actions ships the release plumbing:
+
+- **ci** (PRs + main): `cargo fmt`/`clippy`/`test`, `helm lint`/template, and a
+  Docker build check on PRs.
+- **edge** (push to main): builds + pushes the multi-arch `:edge` image and an
+  `x.y.z-edge.N` OCI chart — continuous installable versions between releases.
+- **release** (push a `vX.Y.Z` tag, or run the workflow manually with a
+  version): multi-arch image (`X.Y.Z`, `X.Y`, `latest`, `sha-…`), the OCI Helm
+  chart at that version, and a GitHub Release. Cut one with:
+  `git tag v0.2.0 && git push origin v0.2.0`.
 
 ## Operational checklist
 

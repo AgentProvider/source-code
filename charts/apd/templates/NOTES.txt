@@ -1,0 +1,40 @@
+apd (AAuth Agent Provider) — release {{ .Release.Name }}
+
+  DEMO MODE: AAuth is an IETF Internet-Draft, not yet a released standard.
+  This deployment tracks the drafts and announces demo mode at runtime.
+
+Image:   {{ include "apd.image" . }}
+Issuer:  {{ .Values.issuer }}
+Storage: {{ .Values.storage.backend }}{{ if eq .Values.storage.backend "redis" }} ({{ .Values.storage.redis.addr }}){{ end }}
+Events:  {{ .Values.config.events.enabled }}
+
+{{- if and (not .Values.keys.existingSecret) (not .Values.keys.keysJson) }}
+
+⚠  NO SIGNING KEYS CONFIGURED. The pod will not start. Create keys and point
+   the chart at them:
+     apd keygen --keys apd-keys.json
+     kubectl create secret generic apd-keys --from-file=apd-keys.json -n {{ .Release.Namespace }}
+     helm upgrade {{ .Release.Name }} ... --set keys.existingSecret=apd-keys
+{{- end }}
+
+Reach it in-cluster:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "apd.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl -s http://127.0.0.1:{{ .Values.service.port }}/healthz
+  curl -s http://127.0.0.1:{{ .Values.service.port }}/.well-known/aauth-agent.json
+
+{{- if .Values.ingress.enabled }}
+
+Publicly at: https://{{ .Values.ingress.host }}   (must equal `issuer`)
+{{- else }}
+
+For external verifiers, expose it over TLS so `issuer` ({{ .Values.issuer }})
+serves /.well-known/aauth-agent.json — enable `ingress` or front it with your LB.
+{{- end }}
+
+{{- if gt (int .Values.replicaCount) 1 }}
+
+Multi-instance: {{ .Values.replicaCount }} replicas share Redis + the signing-key
+secret. Verification is stateless; relying parties cache your JWKS.
+{{- end }}
+
+Docs: https://agentprovider.dev/docs/deployment.html

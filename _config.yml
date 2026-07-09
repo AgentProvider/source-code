@@ -32,6 +32,10 @@ exclude:
   - Cargo.lock
   - crates/
   - target/
+  - charts/
+  - Dockerfile
+  - .dockerignore
+  - .github/
   - LICENSE-MIT
   - LICENSE-APACHE
   - Gemfile

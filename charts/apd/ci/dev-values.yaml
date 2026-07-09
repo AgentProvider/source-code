@@ -1,0 +1,32 @@
+# Values used by `helm lint`/`helm template` in CI to exercise the templates
+# end to end (dev-only; inline keys + admin token + static enroll token).
+issuer: https://ap.ci.example
+image:
+  tag: "ci"
+keys:
+  keysJson: |
+    {"active":"ci","keys":[{"kid":"ci","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","created_at":0}]}
+admin:
+  enabled: true
+  value: "ci-admin-token"
+staticEnrollToken:
+  value: "ci-static-enroll-token-1234"
+config:
+  enrollment:
+    methods: ["token", "federated"]
+  events:
+    enabled: true
+extraConfig:
+  enrollment:
+    trusted_issuers:
+      - name: ci-oidc
+        type: oidc
+        issuer: https://oidc.ci.example
+        required_claims:
+          sub: "system:serviceaccount:agents:*"
+        embed_claims:
+          kubernetes.io.namespace: k8s_namespace
+ingress:
+  enabled: true
+  className: nginx
+  host: ap.ci.example

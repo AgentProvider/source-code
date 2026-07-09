@@ -1,0 +1,128 @@
+{{- if and (gt (int .Values.replicaCount) 1) (ne .Values.storage.backend "redis") (not .Values.autoscaling.enabled) }}
+{{- fail "replicaCount > 1 requires storage.backend=redis (state must be shared across replicas)" }}
+{{- end }}
+{{- if and (gt (int .Values.replicaCount) 1) (not .Values.keys.existingSecret) (not .Values.keys.keysJson) }}
+{{- fail "replicaCount > 1 requires a shared signing-key secret (keys.existingSecret) so all replicas sign with the same keys" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "apd.fullname" . }}
+  labels:
+    {{- include "apd.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "apd.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Roll pods when the rendered config changes.
+        checksum/config: {{ include "apd.configJson" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "apd.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "apd.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: apd
+          image: {{ include "apd.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args: ["serve", "--config", "/etc/apd/apd.json"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            {{- if .Values.admin.enabled }}
+            - name: APD_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.admin.existingSecret | default (printf "%s-admin" (include "apd.fullname" .)) }}
+                  key: {{ .Values.admin.existingSecretKey }}
+            {{- end }}
+            {{- if or .Values.staticEnrollToken.existingSecret .Values.staticEnrollToken.value }}
+            - name: APD_STATIC_ENROLL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.staticEnrollToken.existingSecret | default (printf "%s-static-enroll" (include "apd.fullname" .)) }}
+                  key: {{ .Values.staticEnrollToken.existingSecretKey }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/apd/apd.json
+              subPath: apd.json
+              readOnly: true
+            - name: keys
+              mountPath: /etc/apd/keys
+              readOnly: true
+            {{- if eq .Values.storage.backend "file" }}
+            - name: state
+              mountPath: {{ dir .Values.storage.file.path }}
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "apd.fullname" . }}
+        - name: keys
+          secret:
+            secretName: {{ include "apd.keysSecretName" . }}
+            items:
+              - key: {{ .Values.keys.existingSecretKey }}
+                path: apd-keys.json
+        {{- if eq .Values.storage.backend "file" }}
+        - name: state
+          {{- if .Values.storage.file.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "apd.fullname" . }}-state
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

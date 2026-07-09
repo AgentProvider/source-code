@@ -1,0 +1,24 @@
+apiVersion: v2
+name: apd
+description: A self-hostable AAuth Agent Provider — cryptographic identity for AI agents
+type: application
+# version (chart) and appVersion (image tag) are overwritten in CI from the
+# git tag; these are the local/dev defaults.
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.23.0-0"
+home: https://agentprovider.dev
+sources:
+  - https://github.com/agentprovider/source-code
+keywords:
+  - aauth
+  - agent-provider
+  - authentication
+  - ai-agents
+  - mcp
+maintainers:
+  - name: agentprovider
+    url: https://github.com/agentprovider
+annotations:
+  category: Security
+  licenses: MIT OR Apache-2.0

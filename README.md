@@ -1,5 +1,11 @@
 # apd — a self-hostable AAuth Agent Provider
 
+[![ci](https://github.com/agentprovider/source-code/actions/workflows/ci.yml/badge.svg)](https://github.com/agentprovider/source-code/actions/workflows/ci.yml)
+[![release](https://github.com/agentprovider/source-code/actions/workflows/release.yml/badge.svg)](https://github.com/agentprovider/source-code/actions/workflows/release.yml)
+[![image](https://img.shields.io/badge/ghcr.io-agentprovider%2Fapd-blue?logo=docker)](https://github.com/agentprovider/source-code/pkgs/container/apd)
+[![docs](https://img.shields.io/badge/docs-agentprovider.dev-brightgreen)](https://agentprovider.dev)
+[![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-informational)](#status--license)
+
 > ⚠️ **Demo mode — AAuth is not yet released.** AAuth is a set of evolving IETF
 > Internet-Drafts, not a finalized standard. `apd` tracks a specific revision of
 > that spec family (see [Status](#status--license)) and will change — sometimes
@@ -196,12 +202,32 @@ agent that signs HTTP Message Signatures — see
 ceremony, and the in-repo integration tests
 (`crates/apd/src/tests.rs`) for a working reference agent implementation.
 
+## Run with Docker / Kubernetes
+
+Prebuilt **multi-arch** images (amd64 + arm64) and an **OCI Helm chart** ship on
+every release (plus a rolling `edge` from `main`):
+
+```sh
+# Docker (distroless, non-root, ~11 MB)
+docker run --rm -v "$PWD:/data" ghcr.io/agentprovider/apd:latest keygen --keys /data/apd-keys.json
+docker run -p 8420:8420 -v "$PWD:/data:ro" ghcr.io/agentprovider/apd:latest serve --config /data/apd.json
+
+# Kubernetes (Helm, OCI)
+kubectl create secret generic apd-keys --from-file=apd-keys.json
+helm install apd oci://ghcr.io/agentprovider/charts/apd \
+  --set issuer=https://ap.example.com --set keys.existingSecret=apd-keys
+```
+
+Multi-instance scales with `storage.backend=redis` + shared keys (the chart
+enforces both). Details: [`docs/deployment.md`](docs/deployment.md),
+[`charts/apd/README.md`](charts/apd/README.md).
+
 ## Production deployment
 
 See [`docs/deployment.md`](docs/deployment.md) for TLS termination, the
-single-instance and multi-instance (Redis) topologies, key rotation, and
-container/systemd examples. The full HTTP surface is in
-[`docs/api.md`](docs/api.md); every configuration field is in
+single-instance and multi-instance (Redis) topologies, key rotation, the
+container image, the Helm chart, and the CI/CD release pipeline. The full HTTP
+surface is in [`docs/api.md`](docs/api.md); every configuration field is in
 [`docs/configuration.md`](docs/configuration.md).
 
 ## Layout

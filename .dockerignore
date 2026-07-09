@@ -1,0 +1,16 @@
+# Only the workspace manifests + crate sources are needed for the build.
+/target
+**/target
+.git
+.github
+charts
+docs
+research
+_includes
+_config.yml
+CNAME
+*.md
+LICENSE-*
+apd-keys.json
+apd*.json
+*.jsonl

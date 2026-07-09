@@ -1,0 +1,172 @@
+# Default values for apd.
+# See charts/apd/README.md for the full guide and production notes.
+
+# -- Number of apd replicas. >1 REQUIRES storage.backend=redis and a shared
+# signing-key secret (keys.existingSecret) — verification is stateless, but
+# enrollment/replay/event state and the signing keys must be shared.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/agentprovider/apd
+  # -- Image tag. Defaults to the chart's appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -- The AP's public HTTPS server identifier. MUST be the exact origin that
+# serves /.well-known/aauth-agent.json (i.e. what your Ingress/LB exposes).
+# Goes into every token's `iss`.
+issuer: "https://ap.example.com"
+
+# ---------------------------------------------------------------- apd config
+# These map onto apd's JSON config; the chart renders /etc/apd/apd.json from
+# them. `extraConfig` is deep-merged last for anything not surfaced here
+# (e.g. enrollment.trusted_issuers, jwks_cross_origin_hosts, metadata).
+config:
+  agentTokenTtlSecs: 3600
+  signatureWindowSecs: 60
+  allowPsOverride: true
+  enrollment:
+    # any of: token, federated, allowlist, open
+    methods: ["token"]
+    defaultPs: ""
+  events:
+    enabled: true
+  # Emit structured audit events to a file in addition to stderr (empty = stderr only).
+  auditLogFile: ""
+  # DEV ONLY — accept http:// issuer and private-network egress. Never in prod.
+  insecureDevMode: false
+
+# -- Arbitrary extra keys deep-merged into apd.json (highest precedence).
+# Example:
+#   extraConfig:
+#     enrollment:
+#       trusted_issuers:
+#         - { name: eks, type: oidc, issuer: "https://oidc.eks...", required_claims: {...} }
+extraConfig: {}
+
+# ---------------------------------------------------------------- storage
+storage:
+  # memory | file | redis. Use redis for replicaCount > 1.
+  backend: memory
+  file:
+    path: /var/lib/apd/state.json
+    # PVC for the file backend (single replica only).
+    persistence:
+      enabled: false
+      size: 1Gi
+      storageClass: ""
+      accessMode: ReadWriteOnce
+  redis:
+    # host:port of an EXTERNAL Redis (bring your own; >= 6.2). Or set from a secret via env.
+    addr: ""
+    keyPrefix: "apd:"
+
+# ---------------------------------------------------------------- signing keys
+# apd's Ed25519 signing keys. All replicas MUST share the same keys.
+keys:
+  # Recommended: reference a Secret you created with:
+  #   apd keygen --keys apd-keys.json
+  #   kubectl create secret generic apd-keys --from-file=apd-keys.json
+  existingSecret: ""
+  existingSecretKey: "apd-keys.json"
+  # Dev/quick-start: paste the contents of apd-keys.json here and the chart
+  # creates the Secret. Keep out of Git for anything real.
+  keysJson: ""
+
+# ---------------------------------------------------------------- admin token
+admin:
+  enabled: false
+  existingSecret: ""
+  existingSecretKey: "admin-token"
+  # If set (and no existingSecret), the chart creates a Secret with this value.
+  value: ""
+
+# -- Optional static enrollment token (dev/CI convenience) injected via
+# APD_STATIC_ENROLL_TOKEN. Prefer minted/federated enrollment in production.
+staticEnrollToken:
+  existingSecret: ""
+  existingSecretKey: "static-enroll-token"
+  value: ""
+
+# ---------------------------------------------------------------- networking
+service:
+  type: ClusterIP
+  port: 8420
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # host that serves the issuer origin; must match `issuer`.
+  host: ap.example.com
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: true
+    secretName: apd-tls
+
+# ---------------------------------------------------------------- workload
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults matching the distroless nonroot image (uid 65532).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 15
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 10
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+# Spread replicas across nodes by default when scaled out.
+topologySpreadConstraints: []
+
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []

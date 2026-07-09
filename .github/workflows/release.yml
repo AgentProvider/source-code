@@ -1,0 +1,127 @@
+name: release
+
+# Cut a release by pushing a semver tag (git tag v0.2.0 && git push --tags),
+# or from the Actions UI (workflow_dispatch → version). Produces:
+#   - multi-arch image   ghcr.io/<owner>/apd:<version> (+ x.y, latest, sha)
+#   - OCI Helm chart      oci://ghcr.io/<owner>/charts/apd  version <version>
+#   - a GitHub Release
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, e.g. 0.2.0 (no leading v)"
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Releasing version $V"
+
+  image:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/apd
+          tags: |
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.version }}
+            type=raw,value=latest
+            type=sha,prefix=sha-
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+  chart:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - name: Package and push OCI chart
+        env:
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login "$REGISTRY" \
+            --username "${{ github.actor }}" --password-stdin
+          helm package charts/apd --version "$V" --app-version "$V" -d dist
+          helm push "dist/apd-${V}.tgz" "oci://${REGISTRY}/${{ github.repository_owner }}/charts"
+
+  release:
+    needs: [version, image, chart]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ needs.version.outputs.version }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          NOTES=$(cat <<EOF
+          apd v${V} — AAuth Agent Provider (demo mode; AAuth is an IETF draft).
+
+          ### Container image (multi-arch: amd64, arm64)
+          \`\`\`
+          docker pull ghcr.io/${OWNER}/apd:${V}
+          \`\`\`
+
+          ### Helm chart (OCI)
+          \`\`\`
+          helm install apd oci://ghcr.io/${OWNER}/charts/apd --version ${V} \\
+            --set issuer=https://ap.example.com --set keys.existingSecret=apd-keys
+          \`\`\`
+
+          See https://agentprovider.dev/docs/deployment.html
+          EOF
+          )
+          TAG="v${V}"
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "apd v${V}" --notes "$NOTES" --target "$GITHUB_SHA"
+          else
+            gh release create "$TAG" --title "apd v${V}" --notes "$NOTES" || \
+              gh release edit "$TAG" --notes "$NOTES"
+          fi
