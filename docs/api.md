@@ -19,7 +19,10 @@ Agent Provider metadata. `issuer`, `jwks_uri`, optional display fields, and
 The AP's public signing keys (Ed25519 JWKs, `kid`-tagged, active key first).
 
 ### `GET /healthz`
-`{"status":"ok","issuer":...,"uptime_secs":N}`.
+`{"status":"ok","mode":"demo","issuer":...,"uptime_secs":N}`.
+`mode` is `"demo"` while AAuth remains an Internet-Draft (see the README
+status notice); the server also announces this at startup on the CLI and as a
+`demo_mode_notice` structured log event.
 
 ## Agent ceremony endpoints
 

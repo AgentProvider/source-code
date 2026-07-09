@@ -1,12 +1,15 @@
 # apd — a self-hostable AAuth Agent Provider
 
-> ⚠️ **Under active development.** AAuth is a set of evolving IETF Internet-Drafts,
-> not a finalized standard. `apd` tracks a specific revision of that spec family
-> (see [Status](#status--license)) and will change — sometimes in
-> backwards-incompatible ways — as the drafts mature. Treat it as a
-> spec-tracking reference implementation: great for building against AAuth today
-> and for interop experiments, but pin a commit and review the changelog before
-> relying on it in production. Feedback and issues welcome.
+> ⚠️ **Demo mode — AAuth is not yet released.** AAuth is a set of evolving IETF
+> Internet-Drafts, not a finalized standard. `apd` tracks a specific revision of
+> that spec family (see [Status](#status--license)) and will change — sometimes
+> in backwards-incompatible ways — as the drafts mature. **The server announces
+> this at runtime**: a demo-mode banner on every start, a `demo_mode_notice`
+> structured log event (naming the tracked draft revisions), and
+> `"mode": "demo"` in `GET /healthz` / `apd version`. Treat it as a
+> spec-tracking reference implementation: great for building against AAuth
+> today and for interop experiments, but pin a commit and review the changelog
+> before relying on it in production. Feedback and issues welcome.
 
 `apd` is a fast, dependency-light **Agent Provider (AP)** for the
 [AAuth protocol](https://github.com/dickhardt/AAuth) — the role that gives every
@@ -39,6 +42,34 @@ surface deliberately tiny (token issuance + JWKS + metadata), so `apd` can be
 simple, fast, and easy to operate. Everything else in AAuth — consent, missions,
 resource policy — lives in other roles (Person Server, Access Server, Resource),
 which `apd` never needs to talk to.
+
+## Capability highlights
+
+- **Agent identity, end to end** — Ed25519 `aa-agent+jwt` issuance, two-key
+  (`jkt-jwt`) and single-key refresh ceremonies with replay guards, sub-agent
+  identities (single-level depth enforced), online key rotation, revocation.
+- **Secret-free federated enrollment (new)** — dynamic fleets enroll with
+  cryptographic evidence instead of copied secrets: **Kubernetes / cloud / CI
+  OIDC tokens** (EKS/GKE/AKS, GitHub Actions), **operator-minted key-bound
+  assertions** (`cnf.jwk`/`cnf.jkt` proof-of-possession), and **corporate
+  PKI / SPIFFE** via `x5c` certificate chains with CRL revocation and
+  SPIFFE-ID SAN policy. Verifies EdDSA + RS256/384/512 + ES256/384.
+- **Enrollment gates that compose (new)** — `token` (operator invitations),
+  `federated`, `allowlist` (orchestrator-registered key thumbprints), `open` —
+  evaluated strictly, no fall-through on an invalid credential.
+- **Claims for downstream gating (new)** — issuer-policy `embed_claims` stamp
+  namespace / tenant / repo / SPIFFE ID into every issued agent token
+  (inherited by sub-agents), so MCP servers, gateways, and Person Servers can
+  authorize on them.
+- **Audit trail (new)** — structured JSON events for every enrollment decision,
+  denial, issuance, and revocation (stderr + optional file) — the review trail
+  for human-free issuance.
+- **AAuth Events inbox** — subscribe tokens, the resource-facing `/events`
+  delivery endpoint with atomic `max_uses`, and an agent `/inbox` (poll +
+  long-poll).
+- **Built to operate** — stateless verification for relying parties, memory /
+  file / Redis storage (multi-instance-safe atomic ops), SSRF-hardened
+  egress, RFC-test-vector-backed crypto, zero-warning clippy, 69 tests.
 
 ### Integration guides — "what do I actually build?"
 
@@ -152,14 +183,21 @@ docs/           # api / configuration / deployment reference
 ## Testing
 
 ```sh
-cargo test                                  # unit + in-process end-to-end (incl. a live mock resource)
+cargo test                                  # 69 tests: unit + in-process end-to-end
+                                            # (mock resource, mock OIDC issuer, real
+                                            #  rcgen CA chain, RFC 7515/8037/7638 vectors)
 APD_TEST_REDIS=127.0.0.1:6379 cargo test    # additionally exercise the Redis backend
 cargo clippy --workspace --all-targets      # zero warnings
 ```
 
 ## Status & license
 
-Implements `draft-hardt-oauth-aauth-protocol-09` and companion drafts
-(`bootstrap-01`, `events-00`, `httpbis-signature-key-05`) as of 2026-06. AAuth is
-an evolving IETF Internet-Draft; treat this as a spec-tracking reference
-implementation. Dual-licensed MIT OR Apache-2.0.
+**Demo mode.** Implements `draft-hardt-oauth-aauth-protocol-09` and companion
+drafts (`bootstrap-01`, `events-00`, `httpbis-signature-key-05`) as of 2026-06.
+AAuth is an evolving IETF Internet-Draft family and **not yet a released
+standard**, so `apd` announces demo mode at runtime — a startup banner, a
+`demo_mode_notice` structured log event listing the tracked draft revisions,
+`"mode": "demo"` in `/healthz`, and in `apd version`. This notice is
+deliberately temporary and will be removed when the drafts are published as
+RFCs. Treat this as a spec-tracking reference implementation. Dual-licensed
+MIT OR Apache-2.0.

@@ -34,6 +34,37 @@ use app::App;
 use config::Config;
 use keys::KeySet;
 
+// --------------------------------------------------------------------------
+// TEMPORARY — remove once the AAuth drafts are published as RFCs.
+//
+// AAuth is an evolving IETF Internet-Draft family, not a released standard,
+// so apd runs in DEMO MODE: every server start announces this on the CLI and
+// as a structured log event, and /healthz reports `"mode": "demo"`. Wire
+// formats and APIs may change with draft revisions — pin a commit and do not
+// treat a deployment as production-final.
+// --------------------------------------------------------------------------
+
+/// The draft revisions this build tracks (surfaced in the demo-mode notice).
+const TRACKED_DRAFTS: [&str; 4] = [
+    "draft-hardt-oauth-aauth-protocol-09",
+    "draft-hardt-aauth-bootstrap-01",
+    "draft-hardt-aauth-events-00",
+    "draft-hardt-httpbis-signature-key-05",
+];
+
+const DEMO_MODE_NOTICE: &str = "AAuth is an IETF Internet-Draft family and not yet a released \
+standard; apd is a spec-tracking implementation running in DEMO MODE. Wire formats and APIs may \
+change with draft revisions — pin a commit and do not treat this deployment as production-final.";
+
+fn print_demo_banner() {
+    eprintln!("═══════════════════════════════ DEMO MODE ═══════════════════════════════");
+    eprintln!("  AAuth is an IETF Internet-Draft — not yet a released standard.");
+    eprintln!("  apd tracks those drafts, so this deployment runs in DEMO MODE:");
+    eprintln!("  wire formats and APIs may change with draft revisions.");
+    eprintln!("  Pin a commit; do not treat as production-final. See README -> Status.");
+    eprintln!("══════════════════════════════════════════════════════════════════════════");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("help");
@@ -50,7 +81,11 @@ fn main() {
             Ok(())
         }
         "version" | "--version" | "-V" => {
-            println!("apd {}", env!("CARGO_PKG_VERSION"));
+            println!(
+                "apd {} (demo mode — tracking AAuth Internet-Drafts: {})",
+                env!("CARGO_PKG_VERSION"),
+                TRACKED_DRAFTS.join(", ")
+            );
             Ok(())
         }
         _ => {
@@ -181,7 +216,20 @@ async fn serve(cfg: Config, keys: KeySet) -> Result<(), String> {
         .await
         .map_err(|e| format!("cannot bind {listen}: {e}"))?;
 
+    // TEMPORARY demo-mode announcement (CLI banner + structured log event);
+    // remove alongside the notice constants above once AAuth ships as RFCs.
+    print_demo_banner();
+    app.audit.emit(
+        "demo_mode_notice",
+        serde_json::json!({
+            "notice": DEMO_MODE_NOTICE,
+            "tracked_drafts": TRACKED_DRAFTS,
+            "version": env!("CARGO_PKG_VERSION"),
+        }),
+    );
+
     eprintln!("apd {} listening on {listen}", env!("CARGO_PKG_VERSION"));
+    eprintln!("  mode:     DEMO (AAuth is a draft; see banner above)");
     eprintln!("  issuer:   {issuer}");
     eprintln!("  storage:  {backend}");
     eprintln!(

@@ -22,6 +22,9 @@ pub async fn route(req: Request<Incoming>, app: Arc<App>) -> Resp {
         (&Method::GET, "/healthz") => {
             return crate::problem::json_ok(&serde_json::json!({
                 "status": "ok",
+                // TEMPORARY: "demo" while AAuth remains an Internet-Draft
+                // (see the demo-mode notice in main.rs).
+                "mode": "demo",
                 "issuer": app.cfg.issuer,
                 "uptime_secs": aauth_core::now_unix().saturating_sub(app.started_at),
             }));
