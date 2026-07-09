@@ -46,6 +46,7 @@ Hands-on, implement-in-order guides for the two sides that establish auth:
 
 - [`docs/guide-ai-agent-auth.md`](docs/guide-ai-agent-auth.md) — **make an AI agent authenticate with AAuth**: keys, enroll, get/refresh a token, sign requests, the resource loop, the Person Server flow, sub-agents, events, and a minimal-viable path.
 - [`docs/guide-mcp-server-auth.md`](docs/guide-mcp-server-auth.md) — **add AAuth auth to an MCP server or any HTTP API**: the adoption ladder (identity → resource-managed → PS-asserted → federated), the verification core, MCP-specific wiring, resource tokens, and trusting Agent Providers.
+- [`docs/enrollment.md`](docs/enrollment.md) — **set up enrollment for your users**: what enrollment is, how the spec frames it, apd's hooks, and the patterns for connecting users (invitation, self-service behind your login, IdP group restriction, attested-device, self-hosted).
 
 ### Research notes — the spec, distilled
 
