@@ -8,13 +8,19 @@ issues the identity. This page is the operator how-to; the model and security
 rationale are in [`federated-enrollment-design.md`](federated-enrollment-design.md),
 and the basics of enrollment in general are in [`enrollment.md`](enrollment.md).
 
-```
-Trust anchor (k8s / operator / CA / CI) ──signs──▶ assertion (JWS)
-                                                      │
-Agent: generate key ── POST /enroll (signed w/ key, + assertion) ──▶ apd
-                                                      │  verify vs configured
-                                                      ▼  trusted issuer
-                                        identity: aauth:local@your-domain
+```mermaid
+sequenceDiagram
+    autonumber
+    participant TA as Trust anchor<br/>(k8s / operator / CA / CI)
+    participant AG as Agent (pod / job)
+    participant AP as apd
+    AG->>AG: generate durable key
+    AG->>TA: request evidence<br/>(SA token / operator JWT / cert)
+    TA-->>AG: signed assertion (JWS)
+    AG->>AP: POST /enroll — signed with the key,<br/>+ enrollment_assertion
+    Note over AP: verify vs configured trusted issuer:<br/>signature, aud, exp, claims, SANs, cnf binding
+    AP-->>AG: 201 identity aauth:local@your-domain
+    Note over AG,AP: no per-agent secret ever existed
 ```
 
 ## 1. Enabling it

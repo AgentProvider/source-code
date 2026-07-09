@@ -51,6 +51,29 @@ This means Kubernetes, cloud IdPs, CI providers, custom operators, SPIFFE, and
 corporate CAs are all **the same code path** with different key resolution — and
 the assertion validation (aud, exp, claims, binding, replay) is uniform.
 
+The verification pipeline, fail-cheap and mutating no state until every check
+passes — the diamonds are the only per-issuer-type divergence:
+
+```mermaid
+flowchart TD
+    IN["enrollment_assertion (JWS)"] --> P["parse header + payload"]
+    P --> ROUTE{"iss matches a<br/>configured issuer?"}
+    ROUTE -->|no| DENY["403 invalid_assertion<br/>(audit enroll_denied)"]
+    ROUTE -->|yes| TYPE{"issuer type?"}
+    TYPE -->|"oidc / jwks_*"| K1["resolve key from JWKS<br/>(cached, egress-admitted)"]
+    TYPE -->|x5c| K2["validate cert chain to CA roots<br/>(usage, expiry, CRLs) → leaf key"]
+    K1 --> SIG["verify JWS signature"]
+    K2 --> SIG
+    SIG -->|fail| DENY
+    SIG -->|ok| CLAIMS["check aud, exp/iat/nbf,<br/>required_claims, required_sans"]
+    CLAIMS -->|fail| DENY
+    CLAIMS -->|ok| CNF{"cnf binds the<br/>enrolling key?"}
+    CNF -->|"required but missing/mismatch"| DENY
+    CNF -->|ok / not required| JTI["jti replay guard<br/>(single-use if not key-bound)"]
+    JTI -->|replay| DENY
+    JTI -->|fresh| ISSUE["issue identity +<br/>stamp embed_claims<br/>(audit enroll)"]
+```
+
 ### Assertion requirements (uniform)
 
 - `iss` — routes to the configured trusted-issuer entry (exact match).

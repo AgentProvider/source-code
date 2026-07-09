@@ -1,0 +1,78 @@
+<!-- Mermaid rendering for GitHub Pages.
+     Jekyll/kramdown emits ```mermaid fences as plain code blocks
+     (div.language-mermaid > ... > code); this loader converts them into
+     <pre class="mermaid"> elements and renders them client-side. The same
+     source blocks render natively in the GitHub repo view. -->
+<style>
+  pre.mermaid {
+    display: flex;
+    justify-content: center;
+    background: transparent;
+    border: 0;
+    margin: 1.5rem 0;
+    line-height: 1.2;
+  }
+  pre.mermaid svg { max-width: 100%; height: auto; }
+  /* Hide raw definitions until Mermaid replaces them, but keep them
+     readable if JS is disabled (visibility restored on error below). */
+  pre.mermaid:not([data-processed="true"]) { color: transparent; }
+  pre.mermaid[data-mermaid-failed="true"] {
+    color: inherit;
+    display: block;
+    white-space: pre;
+    overflow-x: auto;
+  }
+</style>
+<script type="module">
+  try {
+    const { default: mermaid } = await import(
+      "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
+    );
+
+    // Collect fenced mermaid blocks produced by kramdown/Rouge and normalize
+    // them into <pre class="mermaid"> holding the raw definition text.
+    const sources = [];
+    document.querySelectorAll("div.language-mermaid").forEach((div) => {
+      const code = div.querySelector("pre code") || div.querySelector("pre");
+      if (code) sources.push({ container: div, text: code.textContent });
+    });
+    document
+      .querySelectorAll("pre > code.language-mermaid")
+      .forEach((code) => {
+        if (!code.closest("div.language-mermaid")) {
+          sources.push({ container: code.closest("pre"), text: code.textContent });
+        }
+      });
+
+    for (const { container, text } of sources) {
+      const pre = document.createElement("pre");
+      pre.className = "mermaid";
+      pre.textContent = text.trim();
+      container.replaceWith(pre);
+    }
+
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "neutral",
+      securityLevel: "strict",
+      fontFamily:
+        '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
+      sequence: { useMaxWidth: true },
+      flowchart: { useMaxWidth: true, curve: "basis" },
+    });
+    await mermaid.run({
+      querySelector: "pre.mermaid",
+      suppressErrors: true,
+    });
+    // Any block Mermaid could not render: show its raw text instead of nothing.
+    document
+      .querySelectorAll('pre.mermaid:not([data-processed="true"])')
+      .forEach((pre) => pre.setAttribute("data-mermaid-failed", "true"));
+  } catch (e) {
+    // CDN unreachable: reveal raw definitions.
+    document
+      .querySelectorAll("pre.mermaid, div.language-mermaid")
+      .forEach((el) => el.setAttribute("data-mermaid-failed", "true"));
+    console.warn("mermaid failed to load:", e);
+  }
+</script>

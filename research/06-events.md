@@ -21,6 +21,25 @@ Four phases:
    `event_endpoint` presenting an `aa-event+jwt` via `Signature-Key`, body = payload.
 4. **Delivery, AP → agent** (AP-internal, non-normative): poll / long-poll / SSE / push.
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AG as Agent
+    participant AP as apd (event inbox)
+    participant R as Resource
+    AG->>AP: request subscribe token
+    AP-->>AG: aa-subscribe+jwt (carries eid, aud = resource)
+    AG->>R: register subscription (subscribe token as Signature-Key)
+    Note over R: store {eid, agent, resource}
+    Note over R: ... time passes ...
+    R->>AP: POST /events — aa-event+jwt (aud = agent, eid)
+    Note over AP: verify vs resource JWKS,<br/>match eid + aud, max_uses,<br/>durably record BEFORE 202
+    AP-->>R: 202 Accepted (remaining_uses)
+    AG->>AP: GET /inbox (signed, long-poll)
+    AP-->>AG: event_token + payload
+    Note over AG: verify event token, dedupe on (iss, eid)
+```
+
 ## 2. Subscribe token (`typ: aa-subscribe+jwt`) — we issue these
 
 Signed by the **AP's** key (same JWKS as agent tokens). Claims:

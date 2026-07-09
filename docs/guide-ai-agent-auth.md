@@ -173,6 +173,22 @@ read `AAuth-Requirement` → satisfy it → retry.** Present your credential via
 `Signature-Key: sig=jwt;jwt="<agent_token>"` until you hold an auth token, then
 present the auth token instead (same signing code — its `cnf.jwk` is your key).
 
+```mermaid
+flowchart TD
+    SIGN["sign request<br/>Signature-Key: sig=jwt<br/>AAuth-Capabilities: ..."] --> SEND["send to resource"]
+    SEND --> RESP{"response?"}
+    RESP -->|200| DONE["use the result"]
+    RESP -->|"401 requirement=agent-token"| A1["retry signed with agent token"] --> SIGN
+    RESP -->|"AAuth-Access token"| A2["store; replay as<br/>Authorization: AAuth ...<br/>(cover 'authorization')"] --> SIGN
+    RESP -->|"202 requirement=interaction"| A3["direct user to url?code=...<br/>(browser / QR / via PS)"] --> POLL["poll Location (signed GET,<br/>respect Retry-After)"]
+    POLL -->|"202 pending"| POLL
+    POLL -->|200| SIGN
+    POLL -->|"403 / 408 / 410"| STOP["surface to caller"]
+    RESP -->|"401 requirement=auth-token<br/>+ resource-token"| A4["Person Server flow (section 6):<br/>get an auth token"] --> SIGN
+    RESP -->|402| A5["settle payment (x402/MPP),<br/>poll Location"] --> SIGN
+    RESP -->|"403 problem+json"| STOP
+```
+
 Also declare what you can handle: `AAuth-Capabilities: interaction, clarification,
 payment` (omit what you can't do — absence means "none").
 
@@ -201,6 +217,31 @@ polling ☐ bind `AAuth-Access` by covering `authorization` ☐ send
 Prerequisite: your agent token has a `ps` claim (set at enrollment). When a
 resource challenges with `requirement=auth-token`, it hands you a
 **resource token**. Verify it, then send it to your PS's `token_endpoint`:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AG as Agent
+    participant R as Resource / MCP
+    participant PS as Person Server
+    participant AS as Access Server<br/>(4-party only)
+    actor U as User
+    AG->>R: signed request (agent token)
+    R-->>AG: 401 requirement=auth-token<br/>+ resource_token (aud = PS)
+    Note over AG: verify resource_token<br/>(iss, agent, agent_jkt, exp)
+    AG->>PS: POST token_endpoint<br/>resource_token + justification
+    alt consent needed
+        PS->>U: consent screen / push
+        U-->>PS: approve (or clarify / deny)
+    end
+    opt 4-party
+        PS->>AS: federate (resource_token)
+        AS-->>PS: auth token
+    end
+    PS-->>AG: auth_token (cnf = your key)
+    AG->>R: signed request (auth token via Signature-Key)
+    R-->>AG: 200 OK
+```
 
 1. Verify the resource token: `iss` == the resource you called, `agent` == you,
    `agent_jkt` == thumbprint of your current signing key, `exp` in the future.

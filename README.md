@@ -33,6 +33,35 @@ calling `apd`.
                                                   (verify against apd's published JWKS)
 ```
 
+The same picture as an actor map — who talks to whom, and who never has to:
+
+```mermaid
+flowchart LR
+  subgraph fleet["Agent fleet"]
+    A["Agent<br/>aauth:local@domain<br/>holds private key"]
+    SUB["Sub-agents"]
+  end
+  subgraph ap["apd - Agent Provider"]
+    ENR["/enroll + /agent-token"]
+    WK["/.well-known metadata + JWKS"]
+    INBOX["/events inbox"]
+  end
+  subgraph world["Relying parties"]
+    R["Resource / MCP server"]
+    PS["Person Server<br/>(consent, user identity)"]
+    AS["Access Server<br/>(resource policy)"]
+  end
+  A -- "enroll once, refresh ~hourly" --> ENR
+  A -- "mints workers via /subagent-token" --> SUB
+  A == "signed requests (RFC 9421)<br/>Signature-Key: sig=jwt" ==> R
+  A -- "resource token -> auth token" --> PS
+  PS -- "federates (4-party)" --> AS
+  R -. "fetch JWKS once, cache<br/>(never calls apd per request)" .-> WK
+  PS -. "verify agent tokens" .-> WK
+  R -- "async events for the agent" --> INBOX
+  A -- "polls /inbox" --> INBOX
+```
+
 ## Why this exists
 
 AAuth replaces API keys and per-server OAuth registration with **self-sovereign,

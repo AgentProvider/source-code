@@ -28,10 +28,35 @@ Pick the lowest rung that meets your need. This guide covers rungs 1–3 (the AS
 rung 4 is a separate policy component; the resource-side wire is the same as
 rung 3 with `aud` = your AS instead of the agent's PS).
 
+```mermaid
+flowchart LR
+    R1["Rung 1<br/>Identity-based<br/><small>verify signatures,<br/>ACL by agent id</small>"] --> R2["Rung 2<br/>Resource-managed<br/><small>wrap your OAuth<br/>via AAuth-Access</small>"]
+    R2 --> R3["Rung 3<br/>PS-asserted<br/><small>end-user identity<br/>from the agent's PS</small>"]
+    R3 --> R4["Rung 4<br/>Federated<br/><small>an Access Server<br/>enforces your policy</small>"]
+    R1 -. "each rung is complete on its own;<br/>add the next only when you need it" .-> R4
+```
+
 ## 1. The core competency: verify a signed request (rung 1)
 
 This is the only thing you *must* build, and it's the 80% case. On a request
 carrying `Signature-Key: sig=jwt;jwt="<agent token>"`:
+
+```mermaid
+flowchart TD
+    REQ["signed MCP request<br/>Signature-Key: sig=jwt;jwt=..."] --> HDRS{"3 sig headers present<br/>+ required components<br/>+ created in window?"}
+    HDRS -->|no| E401["401 + Signature-Error"]
+    HDRS -->|yes| TYP{"typ = aa-agent+jwt,<br/>alg != none?"}
+    TYP -->|no| E401
+    TYP -->|yes| JWKS["discover issuer JWKS:<br/>{iss}/.well-known/aauth-agent.json<br/>(issuer==iss, egress-admitted, cached)"]
+    JWKS --> VJWT{"JWT signature +<br/>exp/iat valid?"}
+    VJWT -->|no| E401
+    VJWT -->|yes| VSIG{"HTTP signature verifies<br/>with cnf.jwk?"}
+    VSIG -->|no| E401
+    VSIG -->|yes| PRIN["principal = sub<br/>(stable agent id)"]
+    PRIN --> POL{"your ACL / rate-limit /<br/>scope policy on sub?"}
+    POL -->|deny| E403["403 (plain, no Signature-Error)"]
+    POL -->|allow| OK["handle the MCP call"]
+```
 
 1. **Parse** `Signature-Input`, `Signature`, `Signature-Key` (correlate by label).
 2. **Check covered components** include `@method`, `@authority`, `@path`,

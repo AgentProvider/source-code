@@ -13,17 +13,20 @@ If you just want to run the ceremony as an agent developer, see
 
 ## 1. Enrollment in one picture
 
-```
-  (0) the agent generates a keypair on the machine where it runs
-        │  private key never leaves; public key is shareable
-        ▼
-  (1) the agent proves it holds the key AND presents whatever the AP requires
-        │  e.g. an invitation token, a signed-in session, an attested device
-        ▼
-  (2) the Agent Provider issues an identity:  aauth:local@your-domain
-        │
-        ▼
-  (3) from now on the agent asks for short-lived tokens and signs its requests
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AG as Agent (new install)
+    participant AP as Agent Provider (apd)
+    Note over AG: generate Ed25519 keypair<br/>private key never leaves the machine
+    AG->>AP: POST /enroll - signed with the key,<br/>plus whatever evidence the AP requires
+    Note over AP: evidence = invitation token,<br/>platform assertion, allow-listed key, or none
+    AP-->>AG: 201 identity aauth:local@your-domain
+    loop every ~hour, automatic
+        AG->>AP: POST /agent-token (proof of key possession)
+        AP-->>AG: short-lived agent token (aa-agent+jwt)
+    end
+    Note over AG: signs every request with its key,<br/>presents the token via Signature-Key
 ```
 
 Enrollment happens **once per install**. After it, the agent just refreshes
@@ -108,7 +111,22 @@ OIDC tokens.
 ## 4. Ways to connect your users to enrollment
 
 Pick the pattern that matches how much control you need. They share the same apd
-underneath; only the gate differs.
+underneath; only the gate differs. This decision tree gets you to the right
+pattern fast:
+
+```mermaid
+flowchart TD
+    START{"Who is being<br/>enrolled?"} -->|"one person's own agent,<br/>own domain"| PA["A. Self-hosted:<br/>publication is enrollment"]
+    START -->|"machines an orchestrator<br/>spawns (k8s, CI, fleets)"| MACH{"Can the platform<br/>sign evidence?"}
+    START -->|"agents belonging to<br/>your product's users"| USERS{"Restrict to a<br/>specific group?"}
+    MACH -->|"yes - OIDC / operator JWT /<br/>corporate CA"| PE["E. Federated workload identity<br/>(no secrets at all)"]
+    MACH -->|"no - but it can call an API"| PF["F. Orchestrator pre-registration<br/>(allowlist thumbprints)"]
+    MACH -->|"small known fleet,<br/>humans provision"| PB["B. Invitation tokens"]
+    USERS -->|no| PC["C. Self-service behind<br/>your login (control plane)"]
+    USERS -->|yes| PD["D. + IdP group check<br/>before minting"]
+    START -->|"just experimenting<br/>on localhost"| PH["H. Open mode"]
+    PE -.->|"regulated / mobile:<br/>add hardware evidence"| PG["G. Attested device"]
+```
 
 ### A. Self-hosted / single owner — "publication is enrollment"
 The simplest case: one person runs their own agent under a domain they control.
@@ -134,10 +152,21 @@ your checks pass, your backend calls apd's admin API to mint an enrollment token
 and hands it to the user's agent. This is the "user-signed-in" flavor, achieved
 without teaching apd about users.
 
-```
-User ──login (your SSO/OIDC)──▶ Your backend ──(authorized)──▶ mint enrollment token
-                                                                     │
-                                    Agent ──enroll with token──▶ apd ── identity
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant CP as Your control plane
+    participant AG as User's agent
+    participant AP as apd
+    U->>CP: sign in — your SSO / OIDC / password
+    CP->>CP: authorize — plan, quota,<br/>group membership
+    CP->>AP: POST /admin/enrollment-tokens<br/>bearer admin token, pin ps + label
+    AP-->>CP: single-use enrollment token
+    CP-->>AG: hand token to the user's agent
+    AG->>AP: POST /enroll with the token
+    AP-->>AG: identity aauth:local@domain
+    Note over AP: apd never sees your users —<br/>your login is the gate
 ```
 
 *Gate: your existing identity system.* Good for consumer apps and any product

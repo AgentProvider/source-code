@@ -66,6 +66,17 @@ instances behind the load balancer — relying parties only ever hit the
 well-known + JWKS endpoints, which serve pre-serialized bytes with cache headers.
 The instances must share two things:
 
+```mermaid
+flowchart TD
+    LB["TLS ingress / load balancer<br/>(preserves Host + path)"]
+    LB --> N1["apd instance 1"]
+    LB --> N2["apd instance 2"]
+    LB --> N3["apd instance N"]
+    N1 & N2 & N3 -->|"shared state (atomic ops)"| REDIS[("Redis<br/>enrollments, jti guards,<br/>subscriptions, inboxes")]
+    N1 & N2 & N3 -.->|"identical signing keys<br/>(same keys_file / secret)"| KEYS["keys_file"]
+    RP["Relying parties<br/>(resources, PSes)"] -.->|"fetch JWKS once, cache;<br/>never per request"| LB
+```
+
 1. **The same signing keys.** Mount the identical `keys_file` (or the same
    secret) on every instance. A token signed by instance A is verified by anyone
    using the JWKS all instances publish.

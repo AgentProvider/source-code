@@ -112,6 +112,32 @@ Four modes, incrementally adoptable; governance (missions) is orthogonal.
    `interaction` / `402` payment steps, verifies the resulting auth token, and hands it to
    the agent.
 
+How the parties grow with each mode (each adds one actor; the agent's request
+signature is constant throughout):
+
+```mermaid
+flowchart TD
+    subgraph M1["1 · Identity-based (2 parties)"]
+        A1["Agent"] -->|signed request| R1["Resource"]
+    end
+    subgraph M2["2 · Resource-managed (2 parties)"]
+        A2["Agent"] -->|signed request| R2["Resource"]
+        R2 -.->|"AAuth-Access token<br/>(wraps existing OAuth)"| A2
+    end
+    subgraph M3["3 · PS-asserted (3 parties)"]
+        A3["Agent"] -->|resource token aud=PS| PS3["Person Server"]
+        PS3 -->|auth token| A3
+        A3 -->|signed request| R3["Resource"]
+    end
+    subgraph M4["4 · Federated (4 parties)"]
+        A4["Agent"] --> PS4["Person Server"]
+        PS4 -->|federates| AS4["Access Server"]
+        AS4 -->|auth token| PS4
+        A4 -->|signed request| R4["Resource"]
+    end
+    M1 --> M2 --> M3 --> M4
+```
+
 Mode selection by the resource when issuing a resource token:
 `aud = AS URL` if it has an AS; else `aud = PS URL` if agent token has `ps`; else handle
 authorization itself.
