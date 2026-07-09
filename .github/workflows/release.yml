@@ -84,10 +84,11 @@ jobs:
           V: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login "$REGISTRY" \
             --username "${{ github.actor }}" --password-stdin
           helm package charts/apd --version "$V" --app-version "$V" -d dist
-          helm push "dist/apd-${V}.tgz" "oci://${REGISTRY}/${{ github.repository_owner }}/charts"
+          helm push "dist/apd-${V}.tgz" "oci://${REGISTRY}/${OWNER}/charts"
 
   release:
     needs: [version, image, chart]
@@ -98,9 +99,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           V: ${{ needs.version.outputs.version }}
-          OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           NOTES=$(cat <<EOF
           apd v${V} — AAuth Agent Provider (demo mode; AAuth is an IETF draft).
 

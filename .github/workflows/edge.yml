@@ -60,11 +60,13 @@ jobs:
       - name: Package and push edge OCI chart
         run: |
           set -euo pipefail
+          # OCI references must be lowercase; the org login name may be mixed-case.
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           APP=$(awk '/^appVersion:/{gsub(/"/,"",$2); print $2}' charts/apd/Chart.yaml)
           V="${APP}-edge.${GITHUB_RUN_NUMBER}"
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login "$REGISTRY" \
             --username "${{ github.actor }}" --password-stdin
           # app-version "edge" makes the chart default image.tag to :edge.
           helm package charts/apd --version "$V" --app-version edge -d dist
-          helm push "dist/apd-${V}.tgz" "oci://${REGISTRY}/${{ github.repository_owner }}/charts"
-          echo "Pushed chart version $V"
+          helm push "dist/apd-${V}.tgz" "oci://${REGISTRY}/${OWNER}/charts"
+          echo "Pushed chart oci://${REGISTRY}/${OWNER}/charts/apd:${V}"
