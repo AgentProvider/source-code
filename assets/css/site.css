@@ -117,12 +117,17 @@ code, kbd, pre { font-family: var(--font-mono); font-size: 0.9em; }
 .nav-links a.cta { color: var(--accent-fg); background: var(--accent); }
 .nav-links a.cta:hover { filter: brightness(1.05); color: var(--accent-fg); }
 .icon-btn {
-  display: grid; place-items: center; width: 34px; height: 34px;
+  /* Self-contained so an <a> and a <button> render identically: reset the
+     inherited .nav-links a padding, native button chrome, and baseline. */
+  appearance: none; -webkit-appearance: none;
+  display: grid; place-items: center; flex: none;
+  width: 34px; height: 34px; padding: 0; margin: 0;
   border-radius: 8px; border: 1px solid var(--border); background: transparent;
-  color: var(--muted-fg); cursor: pointer; transition: color .15s, border-color .15s;
+  color: var(--muted-fg); font: inherit; line-height: 0; cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
 }
-.icon-btn:hover { color: var(--fg); border-color: var(--border-strong); }
-.icon-btn svg { width: 16px; height: 16px; }
+.icon-btn:hover { color: var(--fg); border-color: var(--border-strong); background: var(--muted); }
+.icon-btn svg { display: block; width: 16px; height: 16px; }
 .theme-toggle .moon { display: none; }
 :root[data-theme="dark"] .theme-toggle .sun { display: none; }
 :root[data-theme="dark"] .theme-toggle .moon { display: block; }
