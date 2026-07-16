@@ -214,6 +214,21 @@ GitHub Actions ships the release plumbing:
   chart at that version, and a GitHub Release. Cut one with:
   `git tag v0.2.0 && git push origin v0.2.0`.
 
+## Observability
+
+apd exports **OpenTelemetry metrics and traces** over OTLP/HTTP to a Collector
+(it does not expose a scrape endpoint). Enable with `telemetry.enabled` /
+`APD_TELEMETRY_ENABLED=1` and point `telemetry.endpoint` (or
+`OTEL_EXPORTER_OTLP_ENDPOINT`) at your Collector, e.g.
+`http://otel-collector:4318`; from there fan out to Prometheus, Tempo/Jaeger,
+etc. Disabled by default with zero overhead. Alert on `apd.verify_fail.total`
+(signature/assertion failures), watch `apd.enroll.total` by `method`/`assurance`
+for unexpected shifts, and use `apd.request.duration` for latency SLOs. Full
+metric/trace reference: [configuration.md](configuration.md#observability).
+
+**Rate limiting / abuse protection** is intentionally *not* in apd — apply it at
+the HTTP gateway / ingress in front of `/enroll` and `/agent-token`.
+
 ## Operational checklist
 
 - [ ] `issuer` is the real HTTPS origin; TLS terminates in front; Host/path preserved.
@@ -223,4 +238,6 @@ GitHub Actions ships the release plumbing:
 - [ ] NTP on all hosts.
 - [ ] `insecure_dev_mode` is **off**.
 - [ ] Monitoring hits `/healthz`; alert on non-200.
+- [ ] Gateway/ingress enforces rate limits on `/enroll` and `/agent-token`.
+- [ ] Telemetry points at a Collector; alerts on `apd.verify_fail.total`.
 - [ ] A key-rotation runbook exists (rotate → distribute → wait ≥ token TTL → prune).

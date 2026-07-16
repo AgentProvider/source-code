@@ -134,7 +134,7 @@ description: apd issues short-lived, signed identities to your AI agents — no 
       <div class="card">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 21 2M17 6l2 2M15 8l2 2"/></svg></div>
         <h3>Secret-free enrollment</h3>
-        <p>Agents enroll with your Kubernetes, CI, or corporate CA — a signed assertion, never a copied secret. OIDC, operator-minted, or X.509/SPIFFE.</p>
+        <p>Agents enroll with your Kubernetes, CI, corporate CA, or SPIFFE workload identity — a signed assertion, never a copied secret. OIDC, operator-minted, X.509, or SPIFFE JWT-SVID.</p>
       </div>
       <div class="card">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 11 4.6-2.5 8-6 8-11V5l-8-3z"/><path d="M9 12l2 2 4-4"/></svg></div>
@@ -160,6 +160,16 @@ description: apd issues short-lived, signed identities to your AI agents — no 
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></div>
         <h3>Audit trail</h3>
         <p>Structured JSON for every enrollment decision, denial, issuance, and revocation — to stderr and an optional file. The review trail for automated issuance.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 11 4.6-2.5 8-6 8-11V5l-8-3z"/><path d="M12 8v4M12 16h.01"/></svg></div>
+        <h3>Assurance tiers</h3>
+        <p>Every token carries an <code>assurance</code> claim — <code>none</code> → <code>high</code> — derived from how the agent enrolled. Person Servers and resources gate on it, proportional to trust.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l3-4 3 2 4-6"/></svg></div>
+        <h3>OpenTelemetry</h3>
+        <p>Metrics and traces over OTLP to any Collector — enrollment, issuance, and verify-failure counters, request latency, per-request spans. Off by default, one flag to enable.</p>
       </div>
     </div>
   </div>

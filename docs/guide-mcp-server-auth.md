@@ -263,6 +263,15 @@ only as trustworthy as the AP that signed them). Self-hosted APs (a fleet of one
 are first-class — same verification path; the trust call is per-`iss`. Maintain
 an allow/deny policy over issuers just as you would over API-key issuers.
 
+**The `assurance` claim.** apd stamps an `assurance` tier
+(`none`/`low`/`medium`/`high`) reflecting how the agent enrolled — a
+software-key/open enrollment ranks low, a SPIFFE/PKI-attested workload ranks
+high. Treat it exactly like any other AP-asserted claim: it is only as
+trustworthy as the AP that signed the token, so weigh it together with your
+trust in that `iss`. A useful gate for a sensitive tool is "require
+`assurance in {medium, high}` from APs I don't fully trust." Absent the claim,
+default to your baseline policy.
+
 ## 8. Common pitfalls
 
 - **Rewriting Host or path at a proxy** breaks verification — the signature

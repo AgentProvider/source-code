@@ -184,10 +184,11 @@ defense-in-depth. Good for internal platforms with a restricted user set.
 For Kubernetes pods, CI jobs, autoscaled workers, and anything an orchestrator
 spawns: the agent presents a **signed assertion** from a trust anchor apd is
 configured to trust — a Kubernetes/cloud/CI **OIDC token**, an
-**operator-minted key-bound JWT**, or a **corporate-CA certificate chain**
-(`x5c`, incl. SPIFFE SVIDs). apd verifies it cryptographically; no per-agent
-secret ever exists, and matched claims (namespace, tenant, repo, SPIFFE ID) can
-be stamped into the agent's tokens for downstream gating.
+**operator-minted key-bound JWT**, a **corporate-CA certificate chain** (`x5c`),
+or a **SPIFFE SVID** (a **JWT-SVID** via the `spiffe` issuer type, routed by
+trust domain; or an **X.509-SVID** via `x5c`). apd verifies it cryptographically;
+no per-agent secret ever exists, and matched claims (namespace, tenant, repo,
+SPIFFE ID) can be stamped into the agent's tokens for downstream gating.
 *Gate: your platform's existing workload identity / PKI.* Full recipes:
 [`federated-enrollment.md`](federated-enrollment.md).
 
@@ -222,6 +223,13 @@ boundary (localhost, an isolated lab).
 | F. Orchestrator pre-registration | admin-registered key thumbprint | no | orchestrators preferring an API call |
 | G. Attested device | device/app attestation | optional | mobile, regulated |
 | H. Open | none | no | dev, trusted network |
+
+**Assurance tier.** Whichever pattern you pick, apd records how the agent
+enrolled and stamps an **`assurance`** claim (`none`/`low`/`medium`/`high`) into
+every issued token — open → `none`, static token → `low`, minted token /
+allowlist / OIDC → `medium`, `x5c` / SPIFFE → `high` (overridable per federated
+issuer). Person Servers and resources can apply policy proportional to it. See
+[configuration.md](configuration.md#assurance-tiers).
 
 ---
 

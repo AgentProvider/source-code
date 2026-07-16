@@ -42,10 +42,12 @@ presented-but-invalid credential is a hard `403` (no fall-through).
   (`enrollment.static_tokens` / `APD_STATIC_ENROLL_TOKEN`) — a dev/staging
   convenience; compared constant-time and audited as `token_kind: "static"`.
 - `enrollment_assertion` — a JWS/JWT from a configured trusted issuer
-  (Kubernetes/CI OIDC token, operator-minted cnf-bound JWT, or an `x5c`
-  certificate-chain JWS). See [`federated-enrollment.md`](federated-enrollment.md)
-  for the format, issuer types, and recipes. Single-use `jti` enforcement
-  applies to non-key-bound assertions by default.
+  (Kubernetes/CI OIDC token, operator-minted cnf-bound JWT, an `x5c`
+  certificate-chain JWS, or a **SPIFFE SVID** — a JWT-SVID under a trusted
+  `trust_domain`, or an X.509-SVID via `x5c`). See
+  [`federated-enrollment.md`](federated-enrollment.md) for the format, issuer
+  types, and recipes. Single-use `jti` enforcement applies to non-key-bound
+  assertions by default.
 - `ps` binds a Person Server into future agent tokens (validated server
   identifier); a federated issuer's `ps` pin is authoritative.
 - Re-enrolling the same durable key is idempotent and returns the existing
@@ -71,6 +73,12 @@ Body (optional): `{ "ps"?: url }` — overrides the enrollment's `ps` when
 Response: `200 {"agent_token":..,"token_type":"aa-agent+jwt","expires_in":N,"agent":..}`.
 Errors: `403 not_enrolled` / `enrollment_revoked` / `ps_mismatch`, `401 invalid_jwt`
 (includes naming-JWT replay), signature errors.
+
+The issued `aa-agent+jwt` carries the usual claims (`iss`, `sub`, `dwk`,
+`cnf.jwk`, `iat`, `exp`, `jti`, optional `ps`) plus an **`assurance`** claim
+(`none`/`low`/`medium`/`high`) derived from how the agent enrolled, and any
+issuer `embed_claims`. Receivers may gate on `assurance`; see
+[configuration.md](configuration.md#assurance-tiers).
 
 ### `POST /subagent-token`
 A parent mints a sub-agent identity. Sign with the **parent's agent token**
@@ -149,7 +157,19 @@ Every enrollment decision and issuance is emitted as one JSON line to stderr
 (and `audit_log_file` when configured): `enroll`, `enroll_denied`,
 `agent_token_issued`, `subagent_token_issued`, `agent_revoked`,
 `agent_reinstated`, `enrollment_token_minted`, `allowed_key_added`,
-`allowed_key_removed`.
+`allowed_key_removed`. The `enroll` event includes the derived `assurance` tier.
+
+## Observability (OpenTelemetry)
+
+When `telemetry.enabled` (or `APD_TELEMETRY_ENABLED=1`), apd exports **metrics
+and traces** over OTLP/HTTP to an OpenTelemetry Collector — there is no scrape
+endpoint on apd itself; it pushes to `{telemetry.endpoint}/v1/{metrics,traces}`.
+Off by default. Metrics (scope `apd`): `apd.enroll.total`
+(`method`/`assurance`/`result`), `apd.agent_token.total`,
+`apd.subagent_token.total`, `apd.verify_fail.total` (by route),
+`apd.requests.total` (route + status class), `apd.request.duration` histogram.
+Traces: one SERVER span per request (method, route template, status). See
+[configuration.md](configuration.md#observability).
 
 ## CLI
 

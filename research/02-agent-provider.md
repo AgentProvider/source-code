@@ -150,6 +150,13 @@ signed with `sig=hwk` using the **durable key** (proof of possession at enrollme
   (must equal enrollment's `ps` unless config `allow_ps_override`).
 - Policy hook: enrollment `status` must be `active`.
 - Response: `200 {"agent_token": "...", "expires_in": N, "agent": "aauth:..."}`.
+- **Assurance claim (implemented):** the token carries an `assurance` tier
+  (`none`/`low`/`medium`/`high`) derived from the enrollment method and recorded
+  on the agent record at enroll (bootstrap §5.4, §10.1). It is protected from
+  issuer `embed_claims` override and inherited by sub-agents. Design choice:
+  derive from method rather than trust a client-supplied value; keep the claim
+  name fixed with a per-issuer override, so the tier is legible to receivers
+  without a config-heavy taxonomy.
 
 ### 5.3 Sub-agent tokens — `POST /subagent-token`
 
@@ -231,3 +238,24 @@ sub-agent generates its own key pair and hands the public key to the parent out 
 - AP-to-agent push (APNs/FCM) and SSE/WebSocket streaming — we provide the poll +
   long-poll inbox primitive; streaming/push transports are deployment-specific and
   not shipped.
+- **Rate limiting / abuse throttling** — deliberately delegated to the HTTP
+  gateway / ingress in front of apd, not built into the daemon.
+
+### Observability (implemented)
+
+Metrics **and** traces via OpenTelemetry, exported over OTLP/HTTP to a Collector
+(`telemetry.*` config; off by default). This is the one deliberate heavyweight
+dependency, chosen over a hand-rolled Prometheus endpoint for standards-based,
+vendor-neutral signals. Instruments bind to the global no-op provider when
+disabled, so the hot path never branches. Counters cover enrollment (by
+method/assurance/result), issuance, and verify failures; a histogram covers
+request latency; one SERVER span is emitted per request with bounded route
+templates.
+
+### Workload identity (implemented)
+
+SPIFFE **JWT-SVID** enrollment via the `spiffe` trusted-issuer type: routed by
+trust domain from the `sub` (SPIFFE mandates no `iss`), verified against the
+SPIRE trust-bundle JWKS. **X.509-SVIDs** ride the existing `x5c` type; the two
+are disambiguated by the presence of an x5c chain. WIMSE and cloud-IMDS
+attestation remain future work (bootstrap §4.5).
