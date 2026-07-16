@@ -16,6 +16,10 @@ guidance) and the wider AAuth family (`draft-hardt-oauth-aauth-protocol`,
 > AP signing-key rotation with JWKS overlap + prune (`apd keygen --rotate
 > --prune-days`), admin revoke / reinstate / list, multi-instance storage
 > (memory / file / redis), SSRF egress admission, and per-install random identity.
+>
+> **Shipped since the first cut of this backlog** (see the ✅ entries below for
+> detail): SPIFFE **JWT-SVID** workload enrollment (A4), assurance-tier claims
+> (A5), and OpenTelemetry metrics + traces over OTLP/HTTP (B1).
 
 ---
 
@@ -66,34 +70,44 @@ guidance) and the wider AAuth family (`draft-hardt-oauth-aauth-protocol`,
 - **Effort:** M (mostly docs + optional TPM attestation verification).
 
 ### A4. Workload / headless identity enrollment (SPIFFE SVID, WIMSE, cloud IMDS)
+✅ **DONE (SPIFFE SVID)** — remaining: WIMSE, cloud IMDS.
 - **What:** Verify a workload identity credential at enrollment rather than a
-  user gesture: SPIFFE/SPIRE **SVID** (X.509 or JWT-SVID) signature + trust-domain
-  check, WIMSE workload identity, or cloud IMDS attestation (AWS/GCP/Azure
-  instance identity documents). Today apd has a SPIFFE **allowlist** (static list
-  of trusted IDs) but does not verify a presented SVID against a SPIRE trust
-  bundle.
-- **Why:** Headless agents in k8s / CI / cloud have no user to attest; the trust
-  anchor is platform attestation. This is the "enterprise, no human in the loop"
-  path.
-- **Where:** new enrollment method module; JWT-SVID reuses the existing
-  `enrollment/assertion.rs` verification; X.509-SVID reuses `enrollment/x509.rs`
-  chain logic with SPIFFE SAN policy.
+  user gesture.
+- **Shipped:** the `spiffe` trusted-issuer type verifies a **JWT-SVID** against a
+  SPIFFE trust-bundle JWKS (`jwks` / `jwks_file` / `jwks_uri`), routing by trust
+  domain from the `sub` (SPIFFE mandates no `iss`), with a `required_claims`
+  policy on the workload path and cnf/`jti` replay handling inherited from the
+  federated pipeline (`enrollment/assertion.rs`, `enrollment/issuer_keys.rs`,
+  config `trust_domain`). **X.509-SVID** is covered by the existing `x5c` type
+  with `required_sans: ["spiffe://<td>/…"]` — routing distinguishes the two by
+  the presence of an x5c chain. Enroll via the `federated` method. Tests:
+  `spiffe_jwt_svid_enrollment_and_assurance`.
+- **Still open — WIMSE / cloud IMDS:** verify AWS/GCP/Azure instance identity
+  documents (new trust roots) and WIMSE workload identity. IMDS roots are the
+  only genuinely new verifier; the JWT path reuses `assertion.rs`.
+- **Residual risk noted:** a JWT-SVID with no `jti` cannot be single-use-guarded;
+  rely on short SVID TTL + audience binding to apd. Bundle rotation for
+  `jwks_file` needs a restart (same limitation as any `jwks_file` issuer) —
+  prefer `jwks_uri` for auto-rotating SPIRE bundles.
 - **Spec:** bootstrap §4.5 (TBD); complements existing X.509-CA enrollment.
-- **Effort:** M — X.509/JWT-SVID reuses existing verifiers; IMDS roots are new.
+- **Effort:** WIMSE/IMDS remaining — M.
 
 ### A5. Assurance-tier claims surfaced to receivers
-- **What:** A structured, AP-defined claim (e.g. `assurance` / `amr`-style) in the
-  agent token that tells receivers *how* the agent was enrolled (software key vs.
-  hardware-attested vs. self-hosted) so a PS can apply proportional policy at its
-  consent screen. Today `embed_claims` can carry arbitrary claims per enrollment,
-  but there is no first-class, method-derived assurance level.
-- **Why:** The draft's multi-tenant guidance: free tier gets weak tokens, paid /
-  enterprise tier gets attested tokens, and the difference is surfaced to
-  receivers. Also underpins "receivers apply policy proportional to trust in AP."
-- **Where:** derive from the enrollment method in `issue.rs`; add config to map
-  method → assurance value.
+✅ **DONE.**
+- **What:** A first-class `assurance` claim in every agent token telling receivers
+  how the agent was enrolled, so a PS can apply proportional policy at its consent
+  screen.
+- **Shipped:** the enrollment method derives a tier — `open` → `none`, static
+  token → `low`, minted token / allowlist → `medium`, federated OIDC/JWKS →
+  `medium`, x5c / SPIFFE → `high` — overridable per federated issuer via
+  `assurance`. Stored on the `AgentRecord`, stamped into agent + sub-agent tokens
+  (sub-agents inherit the parent tier), protected from `embed_claims` override,
+  and exported as an OTEL metric dimension + audit field. Tests assert
+  `assurance == "high"` for SPIFFE.
+- **Still open (optional):** a config knob to rename the claim or remap tiers
+  globally; today the claim name is fixed (`assurance`) and per-issuer override
+  covers most needs.
 - **Spec:** bootstrap §5.4, §10.1.
-- **Effort:** S.
 
 ### A6. Durable-key rotation & anomaly detection
 - **What:** (a) Detect anomalous refresh patterns (velocity, geo/asn shifts if
@@ -128,14 +142,25 @@ guidance) and the wider AAuth family (`draft-hardt-oauth-aauth-protocol`,
 ## B. Operational & enterprise maturity (beyond the draft)
 
 ### B1. Metrics & observability
-- **What:** A `/metrics` Prometheus endpoint (enroll / token / refresh counts,
-  latencies, replay rejects, JWKS-cache hit rate) and structured, exportable
-  audit events. Audit records already exist internally; this exposes them.
-- **Why:** Multi-instance production deployments need SLOs and abuse visibility.
-- **Where:** `router.rs` + a lightweight counter registry; audit export in
-  `audit.rs`.
-- **Effort:** M. Keep dependency-free (hand-rolled text exposition format) to
-  match the project's minimal-deps posture.
+✅ **DONE (OpenTelemetry).**
+- **What:** Metrics **and traces** exported over OTLP/HTTP (protobuf) to an OTEL
+  Collector. Disabled by default; enabled via `telemetry.enabled` /
+  `APD_TELEMETRY_ENABLED`, honoring `OTEL_EXPORTER_OTLP_ENDPOINT` /
+  `OTEL_SERVICE_NAME`.
+- **Shipped:** `crates/apd/src/telemetry.rs` installs global OTLP providers (no-op
+  when disabled, so handlers never branch). Metrics: `apd.enroll.total`
+  (method/assurance/result), `apd.agent_token.total`, `apd.subagent_token.total`,
+  `apd.verify_fail.total`, `apd.requests.total` (route/status class),
+  `apd.request.duration` histogram. Traces: one SERVER span per request
+  (method/route/status), route templates keep cardinality bounded. Clean flush on
+  shutdown. Uses the blocking reqwest+rustls client so the thread-based exporters
+  need no ambient tokio runtime.
+- **Deliberate dependency exception:** this is the one heavyweight dep the project
+  takes on, chosen over a hand-rolled Prometheus endpoint for standards-based,
+  vendor-neutral metrics **and** traces.
+- **Still open (optional):** per-request span *attributes* for enrollment
+  method/assurance (kept on metrics for now to avoid `!Send` context plumbing
+  across `.await`); OTLP logs signal; exemplars.
 
 ### B2. Rate limiting & abuse protection
 - **What:** Per-key / per-IP throttles on `/enroll` and `/agent-token`, and a
@@ -182,10 +207,13 @@ guidance) and the wider AAuth family (`draft-hardt-oauth-aauth-protocol`,
 
 ## Prioritization sketch
 
-1. **B1 / B2** (metrics, rate limiting) — unblock safe production operation.
-2. **A4** (workload / SVID enrollment) — highest-leverage new *capability* for the
-   headless/enterprise target audience; reuses existing verifiers.
-3. **A5** (assurance tiers) — small, makes existing enrollment methods legible to
-   receivers.
-4. **A1 / A2** (platform attestation + re-attest) — larger, consumer-mobile focus.
-5. **A6 / A7 / B3 / B4 / A3 / B5** — as demand and threat model dictate.
+Done: **B1** (OTEL metrics + traces), **A4-SPIFFE** (JWT-SVID + X.509-SVID
+workload enrollment), **A5** (assurance tiers). Remaining, in rough order:
+
+1. **A4-remainder** (WIMSE / cloud IMDS enrollment) — extends workload coverage
+   to non-SPIFFE clouds; IMDS trust roots are the only new verifier.
+2. **A1 / A2** (platform attestation + re-attest) — larger, consumer-mobile focus.
+3. **A6 / A7 / B3 / B4 / A3 / B5** — as demand and threat model dictate.
+
+> **B2 (rate limiting) is intentionally not planned here** — throttling and abuse
+> protection are handled at the HTTP gateway / ingress layer in front of `apd`.

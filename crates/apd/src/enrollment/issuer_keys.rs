@@ -66,6 +66,31 @@ impl IssuerRuntime {
                 }
                 static_keys = Some(keys);
             }
+            // SPIFFE JWT-SVID: bundle keys come from an inline JWKS, a JWKS file,
+            // or a remote jwks_uri (left remote, resolved on demand). Exactly one
+            // source is enforced at config validation.
+            "spiffe" => {
+                if let Some(value) = &cfg.jwks {
+                    let keys = AnyJwk::parse_jwks(value);
+                    if keys.is_empty() {
+                        return Err(format!(
+                            "{ctx}: inline spiffe jwks contains no supported keys"
+                        ));
+                    }
+                    static_keys = Some(keys);
+                } else if let Some(path) = &cfg.jwks_file {
+                    let raw = std::fs::read_to_string(path)
+                        .map_err(|e| format!("{ctx}: cannot read jwks_file {path}: {e}"))?;
+                    let value: serde_json::Value = serde_json::from_str(&raw)
+                        .map_err(|e| format!("{ctx}: invalid SPIFFE bundle in {path}: {e}"))?;
+                    let keys = AnyJwk::parse_jwks(&value);
+                    if keys.is_empty() {
+                        return Err(format!("{ctx}: {path} contains no supported keys"));
+                    }
+                    static_keys = Some(keys);
+                }
+                // else jwks_uri: remote, resolved lazily via fetch_remote.
+            }
             "x5c" => {
                 let path = cfg.ca_bundle_file.as_ref().unwrap();
                 let raw = std::fs::read(path)
@@ -105,6 +130,21 @@ impl IssuerRuntime {
 
     pub fn is_x5c(&self) -> bool {
         self.cfg.issuer_type == "x5c"
+    }
+
+    pub fn is_spiffe(&self) -> bool {
+        self.cfg.issuer_type == "spiffe"
+    }
+
+    /// Normalized SPIFFE trust domain as a `spiffe://<domain>` prefix, for
+    /// routing SVIDs by `sub`. `None` for non-spiffe issuers.
+    pub fn spiffe_domain(&self) -> Option<String> {
+        if !self.is_spiffe() {
+            return None;
+        }
+        let td = self.cfg.trust_domain.as_deref()?;
+        let bare = td.strip_prefix("spiffe://").unwrap_or(td);
+        Some(format!("spiffe://{bare}"))
     }
 
     /// Resolve candidate verification keys for a token with the given
@@ -159,6 +199,7 @@ impl IssuerRuntime {
     async fn fetch_remote(&self) -> Result<Vec<AnyJwk>, String> {
         let jwks_uri = match self.cfg.issuer_type.as_str() {
             "jwks_uri" => self.cfg.jwks_uri.clone().unwrap(),
+            "spiffe" => self.cfg.jwks_uri.clone().unwrap(),
             "oidc" => {
                 if let Some(explicit) = &self.cfg.jwks_uri {
                     explicit.clone()

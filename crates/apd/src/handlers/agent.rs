@@ -282,6 +282,7 @@ pub async fn enroll(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
         local = aauth_core::rand_id(16);
     }
 
+    let assurance = authorized.assurance();
     let record = AgentRecord {
         local: local.clone(),
         durable_jkt: durable_jkt.clone(),
@@ -296,6 +297,7 @@ pub async fn enroll(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
         issuer: issuer_name.clone(),
         subject: subject.clone(),
         embed_claims,
+        assurance: Some(assurance.clone()),
     };
     app.store
         .put(
@@ -315,6 +317,14 @@ pub async fn enroll(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
         }
         _ => None,
     };
+    app.metrics.enroll.add(
+        1,
+        &[
+            opentelemetry::KeyValue::new("method", authorized.method()),
+            opentelemetry::KeyValue::new("assurance", assurance.clone()),
+            opentelemetry::KeyValue::new("result", "ok"),
+        ],
+    );
     app.audit.emit(
         "enroll",
         serde_json::json!({
@@ -326,6 +336,7 @@ pub async fn enroll(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
             "subject": subject,
             "jkt": durable_jkt,
             "ps": ps,
+            "assurance": assurance,
         }),
     );
     Ok(json_response(
@@ -414,6 +425,7 @@ pub async fn agent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError>
         ps.as_deref(),
         app.cfg.agent_token_ttl_secs,
         record.embed_claims.as_ref(),
+        record.assurance.as_deref(),
     );
 
     // Best-effort issuance accounting.
@@ -431,6 +443,9 @@ pub async fn agent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError>
         )
         .await;
 
+    app.metrics
+        .agent_token
+        .add(1, &[opentelemetry::KeyValue::new("result", "ok")]);
     let agent_id = AgentId::new(&record.local, &app.cfg.agent_domain()).unwrap();
     app.audit.emit(
         "agent_token_issued",
@@ -497,13 +512,15 @@ pub async fn subagent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiErr
         .verifying_key()
         .map_err(|_| ApiError::bad_request("invalid_key", "cnf_jwk is not a usable Ed25519 key"))?;
 
-    // Sub-agents inherit the parent enrollment's embedded claims.
-    let parent_embed = app
+    // Sub-agents inherit the parent enrollment's embedded claims and assurance
+    // tier (the sub-agent is only as assured as the enrollment behind it).
+    let parent_record = app
         .store
         .get(&agent_key(&parent.local))
         .await?
-        .and_then(|raw| serde_json::from_slice::<AgentRecord>(&raw).ok())
-        .and_then(|r| r.embed_claims);
+        .and_then(|raw| serde_json::from_slice::<AgentRecord>(&raw).ok());
+    let parent_embed = parent_record.as_ref().and_then(|r| r.embed_claims.clone());
+    let parent_assurance = parent_record.as_ref().and_then(|r| r.assurance.clone());
 
     let (token, exp) = issue::subagent_token(
         app,
@@ -513,9 +530,13 @@ pub async fn subagent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiErr
         parent_claims.ps.as_deref(),
         parent_claims.exp,
         parent_embed.as_ref(),
+        parent_assurance.as_deref(),
     )
     .map_err(|e| ApiError::bad_request("invalid_request", e))?;
 
+    app.metrics
+        .subagent_token
+        .add(1, &[opentelemetry::KeyValue::new("result", "ok")]);
     let sub_id = parent.subagent(discriminator).unwrap();
     app.audit.emit(
         "subagent_token_issued",

@@ -89,6 +89,18 @@ which `apd` never needs to talk to.
   assertions** (`cnf.jwk`/`cnf.jkt` proof-of-possession), and **corporate
   PKI / SPIFFE** via `x5c` certificate chains with CRL revocation and
   SPIFFE-ID SAN policy. Verifies EdDSA + RS256/384/512 + ES256/384.
+- **SPIFFE workload identity (new)** — headless agents in k8s / CI / cloud
+  enroll with a **SPIFFE SVID** and no human gesture: **JWT-SVIDs** verified
+  against a SPIRE trust-bundle JWKS and routed by trust domain (`spiffe` issuer
+  type), and **X.509-SVIDs** via `x5c` with `spiffe://` SAN policy.
+- **Assurance tiers (new)** — every agent token carries an `assurance` claim
+  (`none`/`low`/`medium`/`high`) derived from *how* the agent enrolled
+  (open vs. token vs. OIDC vs. x5c/SPIFFE), overridable per issuer, so Person
+  Servers and resources apply policy proportional to trust in the enrollment.
+- **OpenTelemetry observability (new)** — OTLP/HTTP **metrics + traces** to any
+  OTEL Collector: enrollment/issuance/verify-failure counters (dimensioned by
+  method + assurance), request duration, and a span per request. Off by
+  default; one flag or `OTEL_*` env to enable.
 - **Enrollment gates that compose (new)** — `token` (operator invitations),
   `federated`, `allowlist` (orchestrator-registered key thumbprints), `open` —
   evaluated strictly, no fall-through on an invalid credential.
@@ -130,9 +142,11 @@ See [`research/`](research/) for a full, detail-level reading of the spec family
 
 | Area | Detail |
 |---|---|
-| **Agent tokens** | `aa-agent+jwt`, Ed25519, `cnf.jwk` bound, `≤24h` (config, default 1h), optional `ps` claim |
-| **Enrollment** | composable gates: `token` (admin-minted single-use tokens), **`federated`** (secret-free workload identity: Kubernetes/CI OIDC, operator-minted cnf-bound assertions, corporate-CA `x5c`/SPIFFE), **`allowlist`** (orchestrator-registered key thumbprints), `open` |
-| **Federated verification** | EdDSA + RS256/RS384/RS512 + ES256/ES384 assertions; OIDC discovery / static JWKS / X.509 chains with CRLs + SAN policy; claim policy with wildcards; `cnf.jwk`/`cnf.jkt` proof-of-possession; `jti` replay guard; `embed_claims` stamped into issued tokens |
+| **Agent tokens** | `aa-agent+jwt`, Ed25519, `cnf.jwk` bound, `≤24h` (config, default 1h), optional `ps` claim, method-derived `assurance` claim |
+| **Enrollment** | composable gates: `token` (admin-minted single-use tokens), **`federated`** (secret-free workload identity: Kubernetes/CI OIDC, operator-minted cnf-bound assertions, corporate-CA `x5c`/SPIFFE, **SPIFFE JWT-SVID**), **`allowlist`** (orchestrator-registered key thumbprints), `open` |
+| **Federated verification** | EdDSA + RS256/RS384/RS512 + ES256/ES384 assertions; OIDC discovery / static JWKS / X.509 chains with CRLs + SAN policy; **SPIFFE JWT-SVID** routed by trust domain; claim policy with wildcards; `cnf.jwk`/`cnf.jkt` proof-of-possession; `jti` replay guard; `embed_claims` stamped into issued tokens |
+| **Assurance** | first-class `assurance` tier (`none`/`low`/`medium`/`high`) derived from the enrollment method, per-issuer overridable, inherited by sub-agents, protected from `embed_claims` override |
+| **Observability** | OpenTelemetry metrics + traces over OTLP/HTTP (off by default); enrollment/issuance/verify counters, request-duration histogram, per-request server span |
 | **Refresh** | two-key (`jkt-jwt` naming JWT, replay-guarded) and single-key (`hwk`) ceremonies |
 | **Sub-agents** | parent-mediated issuance, `parent_agent` claim, single-level-depth enforced, `exp` capped to parent, inherits embedded claims |
 | **Metadata + JWKS** | `/.well-known/aauth-agent.json`, `/.well-known/jwks.json`, cacheable, key rotation with `kid` |
@@ -153,6 +167,12 @@ library, no Redis client, no base64/structured-field crates — the protocol
 primitives are implemented from the RFCs in
 [`crates/aauth-core`](crates/aauth-core) and unit-tested against published test
 vectors (RFC 8037 keys/signatures, RFC 7638 thumbprints, RFC 7515 RS256/ES256).
+
+The one **deliberate heavyweight exception** is OpenTelemetry
+(`opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`), taken on for
+standards-based, vendor-neutral metrics + traces. It is inert unless telemetry
+is enabled in config, and the exporter reuses `rustls` (blocking reqwest) to
+keep the TLS posture consistent.
 
 ## Quick start (local, no TLS)
 

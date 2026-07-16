@@ -10,7 +10,7 @@ use crate::app::App;
 
 /// Claims that may never be overridden by issuer `embed_claims`
 /// (defense-in-depth; also validated at config load).
-const PROTECTED: [&str; 11] = [
+const PROTECTED: [&str; 12] = [
     "iss",
     "sub",
     "aud",
@@ -22,6 +22,7 @@ const PROTECTED: [&str; 11] = [
     "dwk",
     "ps",
     "parent_agent",
+    "assurance",
 ];
 
 /// Mint an agent token for `local`, bound to `signing_jwk`. `embed_claims`
@@ -35,6 +36,7 @@ pub fn agent_token(
     ps: Option<&str>,
     ttl_secs: u64,
     embed_claims: Option<&serde_json::Map<String, serde_json::Value>>,
+    assurance: Option<&str>,
 ) -> (String, u64) {
     let now = now_unix();
     let exp = now + ttl_secs;
@@ -52,6 +54,9 @@ pub fn agent_token(
     });
     if let Some(ps) = ps {
         payload["ps"] = ps.into();
+    }
+    if let Some(a) = assurance {
+        payload["assurance"] = a.into();
     }
     if let Some(embed) = embed_claims {
         for (name, value) in embed {
@@ -72,6 +77,7 @@ pub fn agent_token(
 
 /// Mint a sub-agent token. `parent` must be a top-level agent id; the returned
 /// token carries `parent_agent` and is capped to `parent_exp`.
+#[allow(clippy::too_many_arguments)]
 pub fn subagent_token(
     app: &App,
     parent: &AgentId,
@@ -80,6 +86,7 @@ pub fn subagent_token(
     ps: Option<&str>,
     parent_exp: u64,
     embed_claims: Option<&serde_json::Map<String, serde_json::Value>>,
+    assurance: Option<&str>,
 ) -> Result<(String, u64), String> {
     let sub_id = parent
         .subagent(discriminator)
@@ -102,6 +109,9 @@ pub fn subagent_token(
     });
     if let Some(ps) = ps {
         payload["ps"] = ps.into();
+    }
+    if let Some(a) = assurance {
+        payload["assurance"] = a.into();
     }
     // Sub-agents inherit the parent enrollment's embedded claims so
     // downstream gating (tenant/group/namespace) applies to workers too.

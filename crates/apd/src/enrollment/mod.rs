@@ -57,4 +57,19 @@ impl Authorized {
             Authorized::Open => "open",
         }
     }
+
+    /// Assurance tier stamped into agent tokens for this enrollment. Federated
+    /// enrollments carry the issuer's tier (override or type default); the
+    /// other methods map to fixed tiers reflecting how much the AP verified.
+    pub fn assurance(&self) -> String {
+        match self {
+            // Admin-minted single-use tokens outrank reusable static tokens.
+            Authorized::Token { static_token, .. } => {
+                if *static_token { "low" } else { "medium" }.to_string()
+            }
+            Authorized::Allowlist { .. } => "medium".to_string(),
+            Authorized::Federated(v) => v.assurance.clone(),
+            Authorized::Open => "none".to_string(),
+        }
+    }
 }

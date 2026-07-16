@@ -80,6 +80,31 @@ pub struct Config {
     /// event deliveries) to this file, in addition to stderr.
     #[serde(default)]
     pub audit_log_file: Option<String>,
+
+    #[serde(default)]
+    pub telemetry: TelemetryConfig,
+}
+
+/// OpenTelemetry (metrics + traces) exported over OTLP/HTTP. Disabled by
+/// default. When enabled, signals are POSTed to `{endpoint}/v1/traces` and
+/// `{endpoint}/v1/metrics` (OTLP/HTTP + protobuf), the standard Collector shape.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryConfig {
+    /// Master switch. Also settable via `APD_TELEMETRY_ENABLED=1`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// OTLP/HTTP base endpoint, e.g. "http://otel-collector:4318". Default
+    /// "http://localhost:4318". Env: `OTEL_EXPORTER_OTLP_ENDPOINT`.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// `service.name` in the emitted resource. Default "apd".
+    /// Env: `OTEL_SERVICE_NAME`.
+    #[serde(default)]
+    pub service_name: Option<String>,
+    /// Metric export interval in seconds (default 30).
+    #[serde(default)]
+    pub metric_interval_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +263,17 @@ pub struct TrustedIssuer {
     /// (on-prem issuers). Explicit per-issuer opt-out of SSRF hardening.
     #[serde(default)]
     pub allow_insecure_egress: bool,
+    /// SPIFFE trust domain for the "spiffe" type (JWT-SVID). Accepts
+    /// "example.org" or "spiffe://example.org"; the assertion `sub` must be a
+    /// SPIFFE ID under this domain. The bundle keys come from jwks / jwks_file
+    /// / jwks_uri (the SPIFFE JWT bundle).
+    #[serde(default)]
+    pub trust_domain: Option<String>,
+    /// Override the assurance tier stamped into agent tokens for enrollments
+    /// from this issuer. Defaults by type: x5c/spiffe → "high", others →
+    /// "medium". Lowercase [a-z0-9_], ≤32 chars.
+    #[serde(default)]
+    pub assurance: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -357,6 +393,15 @@ impl Config {
                 label: Some("env".into()),
             });
         }
+        if let Ok(v) = std::env::var("APD_TELEMETRY_ENABLED") {
+            self.telemetry.enabled = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(v) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+            self.telemetry.endpoint.get_or_insert(v);
+        }
+        if let Ok(v) = std::env::var("OTEL_SERVICE_NAME") {
+            self.telemetry.service_name.get_or_insert(v);
+        }
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -445,6 +490,15 @@ impl Config {
                 |_| "enrollment.default_ps is not a valid server identifier".to_string(),
             )?;
         }
+        if self.telemetry.enabled {
+            if let Some(ep) = &self.telemetry.endpoint {
+                if !ep.starts_with("http://") && !ep.starts_with("https://") {
+                    return Err("telemetry.endpoint must be an http(s) OTLP/HTTP URL, e.g. \
+                         http://otel-collector:4318"
+                        .into());
+                }
+            }
+        }
         Ok(())
     }
 
@@ -459,6 +513,14 @@ impl Config {
 pub const RESERVED_TOKEN_CLAIMS: [&str; 10] = [
     "iss", "sub", "aud", "exp", "iat", "nbf", "jti", "cnf", "dwk", "ps",
 ];
+
+/// Assurance tier value policy: short lowercase token.
+pub fn valid_assurance(v: &str) -> bool {
+    !v.is_empty()
+        && v.len() <= 32
+        && v.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
 
 fn valid_embed_target(name: &str) -> bool {
     !name.is_empty()
@@ -509,10 +571,47 @@ fn validate_trusted_issuer(issuer: &TrustedIssuer, _insecure_dev: bool) -> Resul
                 return Err(format!("{ctx}: ca_bundle_file is required for type x5c"));
             }
         }
+        "spiffe" => {
+            let td = issuer
+                .trust_domain
+                .as_deref()
+                .ok_or_else(|| format!("{ctx}: trust_domain is required for type spiffe"))?;
+            let domain = td.strip_prefix("spiffe://").unwrap_or(td);
+            if domain.is_empty() || domain.contains('/') {
+                return Err(format!(
+                    "{ctx}: trust_domain must be a bare domain or spiffe://<domain> \
+                     (no path), got '{td}'"
+                ));
+            }
+            let sources = [
+                issuer.jwks.is_some(),
+                issuer.jwks_file.is_some(),
+                issuer.jwks_uri.is_some(),
+            ]
+            .iter()
+            .filter(|b| **b)
+            .count();
+            if sources != 1 {
+                return Err(format!(
+                    "{ctx}: type spiffe requires exactly one JWT-bundle source \
+                     (jwks, jwks_file, or jwks_uri)"
+                ));
+            }
+        }
         other => return Err(format!("{ctx}: unknown type '{other}'")),
     }
     if !issuer.required_sans.is_empty() && issuer.issuer_type != "x5c" {
         return Err(format!("{ctx}: required_sans only applies to type x5c"));
+    }
+    if issuer.trust_domain.is_some() && issuer.issuer_type != "spiffe" {
+        return Err(format!("{ctx}: trust_domain only applies to type spiffe"));
+    }
+    if let Some(a) = &issuer.assurance {
+        if !valid_assurance(a) {
+            return Err(format!(
+                "{ctx}: assurance '{a}' must be lowercase [a-z0-9_], 1..=32 chars"
+            ));
+        }
     }
     for (path, matcher) in &issuer.required_claims {
         if path.is_empty() {
@@ -567,6 +666,7 @@ pub const EXAMPLE_CONFIG: &str = r#"{
     "documentation_uri": "https://ap.example.com/docs"
   },
   "events": { "enabled": true },
+  "telemetry": { "enabled": false, "endpoint": "http://localhost:4318" },
   "insecure_dev_mode": false
 }
 "#;
@@ -605,10 +705,19 @@ pub const EXAMPLE_CONFIG_FEDERATED: &str = r#"{
         "ca_bundle_file": "/etc/apd/corp-roots.pem",
         "required_sans": ["spiffe://corp.example/ns/agents/*"],
         "require_cnf_binding": true
+      },
+      {
+        "name": "corp-spire",
+        "type": "spiffe",
+        "issuer": "corp-spire",
+        "trust_domain": "corp.example",
+        "jwks_file": "/etc/apd/spire-bundle.json",
+        "required_claims": { "sub": "spiffe://corp.example/ns/agents/*" }
       }
     ]
   },
   "audit_log_file": "/var/log/apd/audit.jsonl",
-  "events": { "enabled": true }
+  "events": { "enabled": true },
+  "telemetry": { "enabled": true, "endpoint": "http://otel-collector:4318", "service_name": "apd" }
 }
 "#;

@@ -21,6 +21,7 @@ mod records;
 mod reqctx;
 mod router;
 mod storage;
+mod telemetry;
 
 #[cfg(test)]
 mod tests;
@@ -201,6 +202,12 @@ fn run_serve(args: &[String]) -> Result<(), String> {
 async fn serve(cfg: Config, keys: KeySet) -> Result<(), String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    // Install OTLP providers before building App so metric instruments bind to
+    // the real meter. `None` when telemetry is disabled (global no-op stays).
+    let telemetry = telemetry::init(&cfg.telemetry, env!("CARGO_PKG_VERSION"))
+        .map_err(|e| format!("telemetry init: {e}"))?;
+    let telemetry_on = telemetry.is_some();
+
     let listen = cfg.listen.clone();
     let issuer = cfg.issuer.clone();
     let store = storage::open(&cfg.storage)
@@ -246,6 +253,14 @@ async fn serve(cfg: Config, keys: KeySet) -> Result<(), String> {
         "  admin:    {}",
         if admin_enabled { "enabled" } else { "disabled" }
     );
+    eprintln!(
+        "  telemetry:{}",
+        if telemetry_on {
+            " OTLP metrics+traces"
+        } else {
+            " disabled"
+        }
+    );
     if insecure {
         eprintln!("  WARNING:  insecure_dev_mode is ON — do not use in production");
     }
@@ -288,6 +303,9 @@ async fn serve(cfg: Config, keys: KeySet) -> Result<(), String> {
                 break;
             }
         }
+    }
+    if let Some(t) = telemetry {
+        t.shutdown();
     }
     Ok(())
 }

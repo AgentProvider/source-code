@@ -25,6 +25,8 @@ pub struct App {
     pub agent_metadata_bytes: Vec<u8>,
     pub jwks_bytes: Vec<u8>,
     pub started_at: u64,
+    /// OpenTelemetry metric instruments (no-ops when telemetry is disabled).
+    pub metrics: crate::telemetry::Metrics,
 }
 
 impl App {
@@ -53,6 +55,7 @@ impl App {
             agent_metadata_bytes,
             jwks_bytes,
             started_at: now_unix(),
+            metrics: crate::telemetry::Metrics::new(),
         }))
     }
 }

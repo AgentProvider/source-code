@@ -25,6 +25,9 @@ webpki-roots.workspace = true
 ring.workspace = true
 rustls-webpki.workspace = true
 rustls-pki-types.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
 
 [dev-dependencies]
 # Test-only: generates CA/leaf certificates for the x5c enrollment tests.

@@ -46,6 +46,11 @@ pub struct AgentRecord {
     /// (from the issuer's embed_claims policy).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embed_claims: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Assurance tier derived from the enrollment method (stamped as the
+    /// `assurance` agent-token claim so receivers can apply proportional
+    /// policy). E.g. "none" | "low" | "medium" | "high".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assurance: Option<String>,
 }
 
 fn default_method() -> String {

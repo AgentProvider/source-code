@@ -27,6 +27,14 @@ webpki-roots = "0.26"
 ring = "0.17"
 rustls-webpki = { version = "0.103", default-features = false, features = ["ring", "std"] }
 rustls-pki-types = "1"
+# OpenTelemetry (metrics + traces) exported over OTLP/HTTP. This is the one
+# heavyweight dependency the project takes on deliberately, for standards-based
+# observability; the exporter uses reqwest with rustls to reuse our TLS posture.
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio", "trace", "metrics"] }
+# Blocking reqwest client so the thread-based batch/periodic exporters need no
+# ambient tokio runtime (an async client would panic under them).
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "metrics", "http-proto", "reqwest-blocking-client", "reqwest-rustls"] }
 
 [profile.release]
 lto = "thin"

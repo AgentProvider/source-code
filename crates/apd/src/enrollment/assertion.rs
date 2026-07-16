@@ -30,6 +30,8 @@ pub struct FederatedVerdict {
     /// Present when the assertion carried a jti: (jti, remaining lifetime)
     /// and single-use enforcement applies.
     pub consume_jti: Option<(String, u64)>,
+    /// Assurance tier for this enrollment (issuer override or type default).
+    pub assurance: String,
 }
 
 /// Look up a claim by path. Handles dotted key names (e.g. the Kubernetes
@@ -84,6 +86,12 @@ pub fn claim_matches(matcher: &serde_json::Value, actual: &serde_json::Value) ->
     }
 }
 
+/// Is `sub` (a `spiffe://…` ID) within `domain` (normalized `spiffe://<td>`)?
+/// True for the trust-domain root itself and any workload path beneath it.
+fn sub_in_domain(sub: &str, domain: &str) -> bool {
+    sub == domain || sub.starts_with(&format!("{domain}/"))
+}
+
 /// Does `aud` (string or array) contain `expected`?
 fn aud_contains(payload: &serde_json::Value, expected: &str) -> bool {
     match payload.get("aud") {
@@ -113,15 +121,42 @@ pub async fn verify_assertion(
         return Err(format!("unsupported assertion algorithm '{alg}'"));
     }
 
-    let iss = decoded
-        .payload
-        .str_claim("iss")
-        .ok_or("assertion missing iss claim")?
-        .to_string();
-    let issuer = issuers
-        .iter()
-        .find(|i| i.cfg.issuer == iss)
-        .ok_or_else(|| format!("assertion issuer '{iss}' is not trusted"))?;
+    // Routing. A SPIFFE **JWT-SVID** is identified by a `sub` that is a SPIFFE
+    // ID *and the absence of an x5c chain* (it is signed by the trust bundle
+    // JWKS, not a cert). It is routed by trust domain, since SPIFFE does not
+    // mandate an `iss`. An X.509-SVID also has a `spiffe://` sub but carries an
+    // x5c chain and is routed by `iss` like any other x5c assertion. Everything
+    // else routes by exact `iss` match.
+    let has_x5c = decoded
+        .header
+        .x5c
+        .as_ref()
+        .map(|c| !c.is_empty())
+        .unwrap_or(false);
+    let sub_claim = decoded.payload.str_claim("sub").map(str::to_string);
+    let (issuer, route_iss) = if let Some(sub) = sub_claim
+        .as_deref()
+        .filter(|s| !has_x5c && s.starts_with("spiffe://"))
+    {
+        let issuer = issuers
+            .iter()
+            .find(|i| i.is_spiffe() && i.spiffe_domain().is_some_and(|td| sub_in_domain(sub, &td)))
+            .ok_or_else(|| {
+                format!("SPIFFE assertion sub '{sub}' is not under a trusted trust domain")
+            })?;
+        (issuer, sub.to_string())
+    } else {
+        let iss = decoded
+            .payload
+            .str_claim("iss")
+            .ok_or("assertion missing iss claim")?
+            .to_string();
+        let issuer = issuers
+            .iter()
+            .find(|i| !i.is_spiffe() && i.cfg.issuer == iss)
+            .ok_or_else(|| format!("assertion issuer '{iss}' is not trusted"))?;
+        (issuer, iss)
+    };
 
     // ---- signature ----
     let mut sans: Vec<String> = Vec::new();
@@ -273,15 +308,31 @@ pub async fn verify_assertion(
         None
     };
 
+    let assurance = issuer
+        .cfg
+        .assurance
+        .clone()
+        .unwrap_or_else(|| default_assurance(&issuer.cfg.issuer_type).to_string());
+
     Ok(FederatedVerdict {
         issuer_name: issuer.cfg.name.clone(),
-        issuer: iss,
+        issuer: route_iss,
         subject: decoded.payload.str_claim("sub").map(String::from),
         embed,
         ps_pin: issuer.cfg.ps.clone(),
         label: issuer.cfg.label.clone(),
         consume_jti,
+        assurance,
     })
+}
+
+/// Default assurance tier by issuer type: certificate/attested chains rank
+/// "high"; bearer-assertion issuers (OIDC / JWKS) rank "medium".
+pub fn default_assurance(issuer_type: &str) -> &'static str {
+    match issuer_type {
+        "x5c" | "spiffe" => "high",
+        _ => "medium",
+    }
 }
 
 #[cfg(test)]

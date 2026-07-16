@@ -14,11 +14,47 @@ use crate::reqctx::ReqCtx;
 pub async fn route(req: Request<Incoming>, app: Arc<App>) -> Resp {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
+    let route = crate::telemetry::route_template(&path);
+    let start = std::time::Instant::now();
+    let mut span = crate::telemetry::request_span(method.as_str(), route);
 
+    let resp = route_inner(req, method.clone(), path, route, &app, &mut span).await;
+
+    let status = resp.status().as_u16();
+    let attrs = [
+        opentelemetry::KeyValue::new("http.route", route),
+        opentelemetry::KeyValue::new(
+            "http.response.status_class",
+            crate::telemetry::status_class(status),
+        ),
+    ];
+    app.metrics.requests.add(1, &attrs);
+    app.metrics.request_duration.record(
+        start.elapsed().as_secs_f64(),
+        &[opentelemetry::KeyValue::new("http.route", route)],
+    );
+    // A 401 on a signed endpoint is an HTTP-signature / assertion failure.
+    if status == 401 {
+        app.metrics
+            .verify_fail
+            .add(1, &[opentelemetry::KeyValue::new("http.route", route)]);
+    }
+    crate::telemetry::end_request_span(span, status);
+    resp
+}
+
+async fn route_inner(
+    req: Request<Incoming>,
+    method: Method,
+    path: String,
+    _route: &str,
+    app: &Arc<App>,
+    _span: &mut opentelemetry::global::BoxedSpan,
+) -> Resp {
     // Well-known documents are unsigned GETs; serve them before reading a body.
     match (&method, path.as_str()) {
-        (&Method::GET, "/.well-known/aauth-agent.json") => return wellknown::agent_metadata(&app),
-        (&Method::GET, "/.well-known/jwks.json") => return wellknown::jwks(&app),
+        (&Method::GET, "/.well-known/aauth-agent.json") => return wellknown::agent_metadata(app),
+        (&Method::GET, "/.well-known/jwks.json") => return wellknown::jwks(app),
         (&Method::GET, "/healthz") => {
             return crate::problem::json_ok(&serde_json::json!({
                 "status": "ok",
@@ -37,7 +73,7 @@ pub async fn route(req: Request<Incoming>, app: Arc<App>) -> Resp {
         Err(e) => return e.into_response(),
     };
 
-    let result = dispatch(&method, &path, &ctx, &app).await;
+    let result = dispatch(&method, &path, &ctx, app).await;
     match result {
         Ok(resp) => resp,
         Err(e) => e.into_response(),

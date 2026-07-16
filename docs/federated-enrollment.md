@@ -52,26 +52,29 @@ Each `trusted_issuers[]` entry:
 | Field | Applies to | Meaning |
 |---|---|---|
 | `name` | all | unique operator-chosen name (appears in audit + agent records) |
-| `type` | all | `oidc` \| `jwks_uri` \| `jwks_file` \| `jwks` \| `x5c` |
-| `issuer` | all | exact `iss` value assertions must carry; routes the assertion to this entry |
+| `type` | all | `oidc` \| `jwks_uri` \| `jwks_file` \| `jwks` \| `x5c` \| `spiffe` |
+| `issuer` | all | exact `iss` value assertions must carry; routes the assertion to this entry (for `spiffe`, an opaque label — routing is by `trust_domain`) |
+| `trust_domain` | `spiffe` | SPIFFE trust domain (`corp.example` or `spiffe://corp.example`); a JWT-SVID whose `sub` is under it routes here |
 | `audience` | all | required `aud` (string or array member). Default: apd's `issuer` URL |
-| `jwks_uri` | `jwks_uri`, `oidc` (override) | direct JWKS URL |
-| `jwks_file` / `jwks` | `jwks_file` / `jwks` | JWKS from disk / inline (loaded at startup, fail-fast) |
+| `jwks_uri` | `jwks_uri`, `oidc` (override), `spiffe` | direct JWKS URL (SPIFFE bundle for `spiffe`) |
+| `jwks_file` / `jwks` | `jwks_file` / `jwks` / `spiffe` | JWKS from disk / inline (loaded at startup, fail-fast) |
 | `ca_bundle_file` | `x5c` | PEM bundle of trusted CA roots |
 | `crl_file` | `x5c` | optional CRL(s) (PEM or DER) — enables revocation checking |
 | `required_sans` | `x5c` | leaf-cert DNS/URI SAN patterns (exact or trailing-`*`), any-of |
-| `required_claims` | all | claim-path → matcher (exact, array-of-allowed, or trailing-`*` prefix) |
+| `required_claims` | all | claim-path → matcher (exact, array-of-allowed, or trailing-`*` prefix). For `spiffe`, constrain the workload path via `sub` |
 | `embed_claims` | all | assertion-claim path → agent-token claim name; stamped into **every token** issued for the enrollment (and inherited by its sub-agents) |
 | `require_cnf_binding` | all | assertion must bind the enrolling key via `cnf.jwk`/`cnf.jkt` |
 | `single_use_jti` | all | enforce single-use `jti`. Default: **true when not cnf-bound**, false when bound |
+| `assurance` | all | override the assurance tier stamped into tokens (default: `x5c`/`spiffe` → `high`, else `medium`). Lowercase `[a-z0-9_]`, ≤32 chars |
 | `ps` | all | pin the Person Server for these enrollments |
 | `label` | all | label recorded on the enrollment |
-| `allow_insecure_egress` | `oidc`, `jwks_uri` | allow http / private-network fetches for THIS issuer (on-prem). Explicit opt-out of SSRF hardening |
+| `allow_insecure_egress` | `oidc`, `jwks_uri`, `spiffe` | allow http / private-network fetches for THIS issuer (on-prem). Explicit opt-out of SSRF hardening |
 
-**Assertion requirements** (uniform): `iss` matching an entry; `aud` containing
-the entry's audience; `exp` in the future (`iat`/`nbf` sane, 60 s skew); signed
-with **EdDSA, RS256, RS384, RS512, ES256, or ES384**. Claim paths handle dotted
-key names (`kubernetes.io.namespace` resolves the `kubernetes.io` claim).
+**Assertion requirements** (uniform): `iss` matching an entry (or, for a SPIFFE
+JWT-SVID, a `sub` under a trusted `trust_domain`); `aud` containing the entry's
+audience; `exp` in the future (`iat`/`nbf` sane, 60 s skew); signed with
+**EdDSA, RS256, RS384, RS512, ES256, or ES384**. Claim paths handle dotted key
+names (`kubernetes.io.namespace` resolves the `kubernetes.io` claim).
 
 **Key freshness:** remote JWKS (oidc/jwks_uri) are cached with a once-per-minute
 per-issuer refresh floor and a 24 h ceiling, refreshed on unknown `kid`.
@@ -177,19 +180,49 @@ The operator's key belongs in KMS/HSM; rotate by publishing both kids during
 the overlap. If the operator hosts its JWKS over https, use `jwks_uri` instead
 of a file.
 
-### 3.4 SPIFFE / SPIRE
+### 3.4 SPIFFE / SPIRE (workload identity)
 
-**JWT-SVIDs** (simplest): agents fetch a JWT-SVID with `aud` = apd from the
-Workload API. Verify against the trust-domain bundle:
+Headless agents enroll with a **SPIFFE SVID** — no human gesture, no shared
+secret. The trust anchor is the SPIRE trust bundle.
 
-- If you run the SPIRE **OIDC discovery provider**: `type: oidc`, `issuer` =
-  its URL.
-- Otherwise export the JWKS bundle to a file: `type: jwks_file`, and
-  `required_claims: { "sub": "spiffe://corp.example/ns/agents/*" }`.
+**JWT-SVIDs** — use the dedicated `spiffe` issuer type. A JWT-SVID has no `iss`
+(SPIFFE doesn't define one) and its identity is the `sub` (`spiffe://…`), so apd
+routes it by **trust domain** rather than issuer. The agent fetches a JWT-SVID
+with `aud` = apd's issuer URL from the Workload API and presents it as the
+enrollment assertion.
 
-**X.509-SVIDs**: use the `x5c` recipe below with the SPIRE trust-bundle CA and
-`required_sans: ["spiffe://corp.example/ns/agents/*"]` — the SPIFFE ID lives in
-the certificate's URI SAN, which apd extracts and matches.
+```json
+{
+  "name": "corp-spire",
+  "type": "spiffe",
+  "issuer": "corp-spire",
+  "trust_domain": "corp.example",
+  "jwks_file": "/etc/apd/spire-bundle.json",
+  "required_claims": { "sub": "spiffe://corp.example/ns/agents/*" }
+}
+```
+
+- `trust_domain` — bare (`corp.example`) or `spiffe://corp.example`. The SVID's
+  `sub` must be under it.
+- Bundle source — exactly one of `jwks` (inline), `jwks_file`, or `jwks_uri`.
+  For **auto-rotating** SPIRE bundles prefer `jwks_uri` (re-fetched on unknown
+  `kid`); `jwks_file` is loaded once at startup and needs a restart to pick up a
+  rotation. If you run the SPIRE **OIDC discovery provider**, a plain `type:
+  oidc` issuer also works (it supplies an `iss`).
+- Constrain the workload with `required_claims` on `sub` (wildcards allowed).
+- Assurance: `spiffe` enrollments issue tokens with `assurance: "high"`.
+
+> JWT-SVIDs may omit `jti`, so single-use replay guarding can't apply — rely on
+> a short SVID TTL and the `aud` binding to apd. A captured SVID lets an
+> attacker enroll *their own* key under the same identity until it expires;
+> keep SVID lifetimes short.
+
+**X.509-SVIDs** — use the `x5c` recipe below with the SPIRE trust-bundle CA and
+`required_sans: ["spiffe://corp.example/ns/agents/*"]`; the SPIFFE ID lives in
+the certificate's URI SAN, which apd extracts and matches. (apd distinguishes
+the two automatically: an assertion with an x5c chain is treated as an
+X.509-SVID and routed by `iss`; one without is a JWT-SVID routed by trust
+domain.)
 
 ### 3.5 Corporate PKI (step-ca, AD CS, Vault PKI) — `x5c`
 

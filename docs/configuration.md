@@ -30,6 +30,10 @@ rejected, so typos fail loudly at startup.
 | `max_body_bytes` | int | `65536` | Global request-body cap. |
 | `jwks_cross_origin_hosts` | string[] | `[]` | Hosts explicitly admitted as **cross-origin JWKS hosts** when verifying foreign (event) tokens — i.e. a resource whose metadata points `jwks_uri` at a different host than its `issuer` (e.g. a CDN). Empty means same-origin JWKS only, per the Signature-Key draft's requirement that cross-origin JWKS URLs need explicit deployment admission. List bare hostnames, e.g. `["jwks.cdn.example"]`. |
 | `audit_log_file` | string | — | Append structured JSON audit events (enrollments, denials, issuance, revocation, allowed-key changes) to this file, in addition to stderr. |
+| `telemetry.enabled` | bool | `false` | Enable OpenTelemetry export. Also `APD_TELEMETRY_ENABLED=1`. See [Observability](#observability). |
+| `telemetry.endpoint` | url | `http://localhost:4318` | OTLP/HTTP base endpoint of an OTEL Collector; signals go to `{endpoint}/v1/traces` and `/v1/metrics`. Env `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| `telemetry.service_name` | string | `apd` | `service.name` resource attribute. Env `OTEL_SERVICE_NAME`. |
+| `telemetry.metric_interval_secs` | int | `30` | Metric export interval. |
 | `insecure_dev_mode` | bool | `false` | **Dev only.** Allows `http://` issuer + ports, and outbound fetches over http / to private/loopback addresses. Never enable in production. |
 
 ## Storage
@@ -65,3 +69,39 @@ At startup `apd` rejects: a non-conforming `issuer`, `agent_token_ttl_secs`
 outside `1..=86400`, a storage backend missing its required path/address, an
 unknown `enrollment.mode`, and a malformed `enrollment.default_ps`. Fix the
 reported field and restart.
+
+## Assurance tiers
+
+Every issued agent token carries an `assurance` claim so Person Servers and
+resources can apply policy proportional to how the agent enrolled. The tier is
+derived from the enrollment method:
+
+| Enrollment | `assurance` |
+|---|---|
+| `open` | `none` |
+| static enrollment token | `low` |
+| admin-minted token / `allowlist` | `medium` |
+| `federated` OIDC / JWKS | `medium` |
+| `federated` `x5c` / `spiffe` | `high` |
+
+Override per federated issuer with `"assurance": "<tier>"` (lowercase
+`[a-z0-9_]`, ≤32 chars). Sub-agents inherit their parent's tier. The claim is
+protected — a trusted issuer's `embed_claims` cannot forge it.
+
+## Observability
+
+Set `telemetry.enabled` (or `APD_TELEMETRY_ENABLED=1`) to export **metrics and
+traces** over OTLP/HTTP (protobuf) to an OpenTelemetry Collector. Disabled by
+default with zero overhead (instruments are no-ops). Standard `OTEL_*` env vars
+(`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`) are honored.
+
+Metrics (scope `apd`): `apd.enroll.total` (dimensioned by `method`,
+`assurance`, `result`), `apd.agent_token.total`, `apd.subagent_token.total`,
+`apd.verify_fail.total` (by route), `apd.requests.total` (route + status class),
+and the `apd.request.duration` histogram (seconds, by route). Traces: one
+SERVER span per request tagged with method, route template, and status code.
+Route templates keep per-agent paths from exploding cardinality.
+
+```json
+"telemetry": { "enabled": true, "endpoint": "http://otel-collector:4318", "service_name": "apd" }
+```

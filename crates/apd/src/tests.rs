@@ -1072,6 +1072,75 @@ async fn federated_x5c_chain() {
 }
 
 #[tokio::test]
+async fn spiffe_jwt_svid_enrollment_and_assurance() {
+    // A SPIFFE JWT-SVID: signed by the trust-bundle JWKS, `sub` is a SPIFFE ID,
+    // no x5c chain, no `iss`. It is routed by trust domain, and the resulting
+    // enrollment carries the "high" assurance tier into issued agent tokens.
+    let bundle_key = generate_signing_key();
+    let mut bundle_jwk = Jwk::from_verifying_key(&bundle_key.verifying_key());
+    bundle_jwk.kid = Some("spire-1".into());
+    bundle_jwk.alg = Some("EdDSA".into());
+
+    let app = build_app_with(federated_config(serde_json::json!([{
+        "name": "corp-spire",
+        "type": "spiffe",
+        "issuer": "corp-spire",
+        "trust_domain": "corp.example",
+        "jwks": { "keys": [bundle_jwk] },
+        "required_claims": { "sub": "spiffe://corp.example/ns/agents/*" },
+    }])))
+    .await;
+
+    let now = now_unix();
+    // JWT-SVID: SPIFFE mandates no `iss`; identity is the `sub`.
+    let svid = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "spire-1"}),
+        serde_json::json!({
+            "aud": ["https://ap.example"],
+            "sub": "spiffe://corp.example/ns/agents/runner",
+            "iat": now, "exp": now + 300,
+        }),
+        &bundle_key,
+    );
+
+    let durable = generate_signing_key();
+    let (status, body) = enroll_with_assertion(&app, &durable, &svid).await;
+    assert_eq!(status, StatusCode::CREATED, "spiffe enroll failed: {body}");
+
+    // Issued agent tokens carry assurance=high (spiffe default tier).
+    let ephemeral = generate_signing_key();
+    let token = get_agent_token(&app, &durable, &ephemeral, None).await;
+    let decoded = jwt::decode(&token).unwrap();
+    assert_eq!(decoded.payload["assurance"], "high");
+
+    // A sub of a DIFFERENT trust domain is not routed to this issuer.
+    let rogue = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "spire-1"}),
+        serde_json::json!({
+            "aud": ["https://ap.example"],
+            "sub": "spiffe://evil.example/ns/agents/runner",
+            "iat": now, "exp": now + 300,
+        }),
+        &bundle_key,
+    );
+    let (status, _) = enroll_with_assertion(&app, &generate_signing_key(), &rogue).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // A sub outside the allowed workload path is rejected by required_claims.
+    let off_path = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "spire-1"}),
+        serde_json::json!({
+            "aud": ["https://ap.example"],
+            "sub": "spiffe://corp.example/ns/other/x",
+            "iat": now, "exp": now + 300,
+        }),
+        &bundle_key,
+    );
+    let (status, _) = enroll_with_assertion(&app, &generate_signing_key(), &off_path).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn allowlist_enrollment() {
     let app = build_app_with(federated_config(serde_json::json!([{
         "name": "unused", "type": "jwks", "issuer": "https://unused.example",
