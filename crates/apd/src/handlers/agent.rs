@@ -261,7 +261,11 @@ pub async fn enroll(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
     let ps = resolve_ps(app, bound_ps.as_deref(), ps_req)?;
     let label = bound_label.or(body_label);
 
-    // Allocate a unique local part.
+    // Allocate a unique local part. We use a random opaque identifier
+    // (draft-hardt-aauth-bootstrap-01 §6 permits any opaque scheme). Per §6,
+    // if this is ever switched to a deterministic derivation it MUST key off
+    // the *durable* key thumbprint (`durable_jkt`), never the ephemeral key —
+    // the ephemeral key rotates on every refresh and is not a stable identity.
     let mut local = aauth_core::rand_id(16);
     for _ in 0..5 {
         if app
@@ -392,6 +396,12 @@ pub async fn agent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError>
     }
 
     let mut record = active_record_for_jkt(app, &durable_jkt).await?;
+
+    // Refresh is the AP's policy re-evaluation point (bootstrap draft §8): a
+    // future platform-attestation method (App Attest / Play Integrity, §8.3)
+    // would gate here on a fresh, server-nominated, single-use nonce bound to
+    // the attestation (§10.4). apd does not implement client attestation today;
+    // federated-enrollment replay protection (assertion `jti`) is the analog.
 
     let body = ctx.parse_json()?;
     let ps_req = body.get("ps").and_then(|v| v.as_str());
