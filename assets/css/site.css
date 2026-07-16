@@ -116,9 +116,12 @@ code, kbd, pre { font-family: var(--font-mono); font-size: 0.9em; }
 .nav-links a:hover { color: var(--fg); background: var(--muted); }
 .nav-links a.cta { color: var(--accent-fg); background: var(--accent); }
 .nav-links a.cta:hover { filter: brightness(1.05); color: var(--accent-fg); }
-.icon-btn {
-  /* Self-contained so an <a> and a <button> render identically: reset the
-     inherited .nav-links a padding, native button chrome, and baseline. */
+/* Scoped under .nav-links so these win over `.nav-links a` (specificity
+   0,2,0 > 0,1,1) — otherwise the GitHub <a> keeps the text-link padding,
+   shrinking its content box below the icon size so the icon overflows its
+   track and mis-centers. With padding:0 the box is 32px and the 16px icon
+   sits cleanly centered, identical to the <button>. */
+.nav-links .icon-btn {
   appearance: none; -webkit-appearance: none;
   display: grid; place-items: center; flex: none;
   width: 34px; height: 34px; padding: 0; margin: 0;
@@ -126,7 +129,8 @@ code, kbd, pre { font-family: var(--font-mono); font-size: 0.9em; }
   color: var(--muted-fg); font: inherit; line-height: 0; cursor: pointer;
   transition: color .15s, border-color .15s, background .15s;
 }
-.icon-btn:hover { color: var(--fg); border-color: var(--border-strong); background: var(--muted); }
+.nav-links .icon-btn:hover { color: var(--fg); border-color: var(--border-strong); background: var(--muted); }
+/* Kept at low specificity so the theme-toggle .sun/.moon display rules win. */
 .icon-btn svg { display: block; width: 16px; height: 16px; }
 .theme-toggle .moon { display: none; }
 :root[data-theme="dark"] .theme-toggle .sun { display: none; }
