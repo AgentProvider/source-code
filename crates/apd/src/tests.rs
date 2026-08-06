@@ -40,7 +40,7 @@ fn test_keyset() -> (KeySet, SigningKey) {
     let sk = generate_signing_key();
     let mut jwk = Jwk::from_verifying_key(&sk.verifying_key());
     jwk.kid = Some("ap-test-1".into());
-    jwk.alg = Some("EdDSA".into());
+    jwk.alg = Some("Ed25519".into());
     jwk.use_ = Some("sig".into());
     (
         KeySet {

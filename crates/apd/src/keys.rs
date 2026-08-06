@@ -52,7 +52,7 @@ impl KeySet {
             let sk = SigningKey::from_bytes(&seed);
             let mut jwk = Jwk::from_verifying_key(&sk.verifying_key());
             jwk.kid = Some(entry.kid.clone());
-            jwk.alg = Some("EdDSA".into());
+            jwk.alg = Some(aauth_core::jwk::ALG_ED25519.into());
             jwk.use_ = Some("sig".into());
             public_jwks.push(jwk);
             if entry.kid == kf.active {

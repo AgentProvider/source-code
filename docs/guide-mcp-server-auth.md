@@ -45,7 +45,7 @@ carrying `Signature-Key: sig=jwt;jwt="<agent token>"`:
 flowchart TD
     REQ["signed MCP request<br/>Signature-Key: sig=jwt;jwt=..."] --> HDRS{"3 sig headers present<br/>+ required components<br/>+ created in window?"}
     HDRS -->|no| E401["401 + Signature-Error"]
-    HDRS -->|yes| TYP{"typ = aa-agent+jwt,<br/>alg != none?"}
+    HDRS -->|yes| TYP{"typ = aa-agent+jwt,<br/>alg = Ed25519?"}
     TYP -->|no| E401
     TYP -->|yes| JWKS["discover issuer JWKS:<br/>{iss}/.well-known/aauth-agent.json<br/>(issuer==iss, egress-admitted, cached)"]
     JWKS --> VJWT{"JWT signature +<br/>exp/iat valid?"}
@@ -64,7 +64,10 @@ flowchart TD
    required component is missing → `401` + `Signature-Error: error=invalid_input;
    required_input=(...)`.
 3. **Verify the agent token** (a JWT):
-   - header `typ == "aa-agent+jwt"`, `alg != none`;
+   - header `typ == "aa-agent+jwt"`, `alg == "Ed25519"` — the fully-specified
+     identifier; reject `none`, the polymorphic `EdDSA`, and anything else
+     (sig-key §3.3). Respond `401 unsupported_algorithm` with
+     `Accept-Signature-Alg: Ed25519` for a bad `alg`;
    - `dwk == "aauth-agent.json"`; fetch `{iss}/.well-known/aauth-agent.json`,
      **confirm the document's `issuer` equals `iss`** (host-poisoning defense),
      read `jwks_uri`, fetch the JWKS, find the key by the JWT header `kid`, verify

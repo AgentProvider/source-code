@@ -3,7 +3,7 @@
 > Sources: `draft-hardt-oauth-aauth-protocol` (normative agent-token requirements),
 > `draft-hardt-aauth-bootstrap-01` (informational enrollment/refresh patterns),
 > `draft-hardt-aauth-events-00` (AP as event inbox),
-> `draft-hardt-httpbis-signature-key-05` (key schemes used in the ceremonies).
+> `draft-hardt-httpbis-signature-key-08` (key schemes used in the ceremonies).
 
 ## 1. What an AP is
 
@@ -51,7 +51,7 @@ everything) is equally valid where simplicity wins.
   header `jwk`; recomputes and string-compares `iss`; looks up the enrollment by the
   durable key's thumbprint; verifies the HTTP signature against `cnf.jwk`; applies policy;
   issues a fresh agent token with `cnf.jwk` = ephemeral key.
-- **Single-key refresh** — `Signature-Key: sig=hwk;kty="OKP";crv="Ed25519";x="..."`:
+- **Single-key refresh** — `Signature-Key: sig=hwk;kty="OKP";crv="Ed25519";x="...";alg="Ed25519"`:
   the durable key signs the HTTP request directly; AP looks up the enrollment by the
   key's thumbprint and re-issues with the same `cnf.jwk`.
 - **Self-hosted agents** are their own AP: one key, published in their own JWKS at their
@@ -78,7 +78,8 @@ Sub-agents: `local = {parent_local}+{discriminator}`, `discriminator` non-empty,
 
 From the protocol spec:
 
-- [ ] Agent token `typ: aa-agent+jwt`, header `kid`, `alg` never `none`; EdDSA recommended.
+- [ ] Agent token `typ: aa-agent+jwt`, header `kid`, `alg` = fully-specified `Ed25519`
+      (never `none` or the polymorphic `EdDSA`; sig-key §3.3).
 - [ ] Claims: `iss` (our issuer URL, valid server identifier), `dwk: "aauth-agent.json"`,
       `sub` (valid agent identifier, stable), `jti` (unique), `cnf.jwk`, `iat`, `exp`.
 - [ ] Lifetime ≤ 24h (enforce at config load *and* issuance).
@@ -92,8 +93,9 @@ From the protocol spec:
       covered components MUST include `@method`, `@authority`, `@path`, `signature-key`;
       `created` within the validity window (default 60s); respond `401` +
       `Signature-Error` on failure (`invalid_signature`, `invalid_input` +
-      `required_input`, `unsupported_algorithm` + `supported_algorithms`, `invalid_key`,
-      `unknown_key`, `invalid_jwt`, `expired_jwt`, `invalid_request`).
+      `required_input`, `unsupported_algorithm` + `Accept-Signature-Alg: Ed25519`,
+      `unsupported_scheme`, `invalid_key`, `unknown_key`, `invalid_jwt`, `expired_jwt`,
+      `invalid_request`).
 - [ ] Errors: RFC 9457 `application/problem+json` with `error` member.
 - [ ] Events (if enabled): everything in `06-events.md` §AP validation — including
       "MUST NOT return 202 before the event is durably recorded".

@@ -17,12 +17,15 @@ out as such.
 | [05 — Connecting resources & MCP](05-connecting-resources-mcp.md) | The resource adoption ladder, verifying agent identity, resource metadata, `AAuth-Access`, resource/auth tokens, and the MCP integration points | …putting AAuth in front of an API or MCP server |
 | [06 — AAuth Events](06-events.md) | The AP-as-inbox model, subscribe/event tokens, the normative `/events` validation order, and AP→agent delivery patterns | …implementing async event delivery |
 
-## Source drafts (as read, 2026-06)
+## Source drafts (as read, 2026-08)
 
-- `draft-hardt-oauth-aauth-protocol-09` — the core protocol
+- `draft-hardt-oauth-aauth-protocol-10` — the core protocol (adds the fully-specified
+  `alg` requirement, `unsupported_algorithm`, and the `account` request parameter)
 - `draft-hardt-aauth-bootstrap-01` — informational AP enrollment/refresh patterns
 - `draft-hardt-aauth-events-00` — event subscription & delivery
-- `draft-hardt-httpbis-signature-key-05` — `Signature-Key`/`Signature-Error`/`Accept-Signature`
+- `draft-hardt-httpbis-signature-key-08` — `Signature-Key`/`Signature-Error`/`Accept-Signature`;
+  §3.3 Algorithm Determination (fully-specified `alg`, no polymorphic `EdDSA`), §4.2
+  `Accept-Signature-Alg`
 - `draft-hardt-aauth-r3-*` — Rich Resource Requests / vocabularies (directional; MCP mapping)
 - `interop-demo-profile.md` — the five interop surfaces
 

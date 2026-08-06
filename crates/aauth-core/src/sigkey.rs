@@ -52,13 +52,20 @@ pub fn parse_member(value: &MemberValue) -> Result<SigKeyScheme, SigError> {
     match scheme_token {
         "hwk" => {
             let kty = str_param(params, "kty")?;
-            // alg MUST NOT be present on hwk
-            if sfv::param(params, "alg").is_some() {
-                return Err(SigError::new(
-                    SigErrorCode::InvalidKey,
-                    "hwk must not carry an alg parameter",
-                ));
-            }
+            // sig-key §3.3: the JWK MUST carry a fully-specified `alg`. Absent
+            // `alg` is a malformed key (`invalid_key`); a present-but-wrong
+            // `alg` (polymorphic `EdDSA`, or an algorithm we don't implement) is
+            // `unsupported_algorithm`. We MUST NOT infer the algorithm from
+            // kty/crv when `alg` is missing.
+            let alg = match sfv::param(params, "alg").and_then(|v| v.as_str()) {
+                Some(a) => a.to_string(),
+                None => {
+                    return Err(SigError::new(
+                        SigErrorCode::InvalidKey,
+                        "hwk missing required alg parameter",
+                    ))
+                }
+            };
             if kty != "OKP" {
                 return Err(SigError::new(
                     SigErrorCode::UnsupportedAlgorithm,
@@ -73,12 +80,18 @@ pub fn parse_member(value: &MemberValue) -> Result<SigKeyScheme, SigError> {
                     "only Ed25519 keys are supported",
                 ));
             }
+            if alg != crate::jwk::ALG_ED25519 {
+                return Err(SigError::new(
+                    SigErrorCode::UnsupportedAlgorithm,
+                    "hwk alg must be the fully-specified Ed25519 identifier",
+                ));
+            }
             Ok(SigKeyScheme::Hwk(Jwk {
                 kty,
                 crv,
                 x,
                 kid: None,
-                alg: None,
+                alg: Some(alg),
                 use_: None,
             }))
         }
@@ -93,13 +106,15 @@ pub fn parse_member(value: &MemberValue) -> Result<SigKeyScheme, SigError> {
     }
 }
 
-/// Serialize an `hwk` member value (Ed25519).
+/// Serialize an `hwk` member value (Ed25519). Carries the fully-specified
+/// `alg` now required by sig-key §3.3.
 pub fn serialize_hwk(jwk: &Jwk) -> String {
     format!(
-        "hwk;kty={};crv={};x={}",
+        "hwk;kty={};crv={};x={};alg={}",
         sfv::serialize_string(&jwk.kty),
         sfv::serialize_string(&jwk.crv),
-        sfv::serialize_string(&jwk.x)
+        sfv::serialize_string(&jwk.x),
+        sfv::serialize_string(crate::jwk::ALG_ED25519)
     )
 }
 
@@ -324,9 +339,27 @@ mod tests {
             parse_member(&d[0].1.value).unwrap(),
             SigKeyScheme::Other("x509".into())
         );
-        // hwk with alg must be rejected
+        // hwk MUST now carry a fully-specified alg (sig-key §3.3): Ed25519 is
+        // accepted, the polymorphic EdDSA is unsupported_algorithm, and an
+        // absent alg is invalid_key.
+        let d = sfv::parse_dictionary(r#"sig=hwk;kty="OKP";crv="Ed25519";x="AA";alg="Ed25519""#)
+            .unwrap();
+        match parse_member(&d[0].1.value).unwrap() {
+            SigKeyScheme::Hwk(k) => assert_eq!(k.alg.as_deref(), Some("Ed25519")),
+            other => panic!("unexpected scheme {other:?}"),
+        }
+
         let d =
             sfv::parse_dictionary(r#"sig=hwk;kty="OKP";crv="Ed25519";x="AA";alg="EdDSA""#).unwrap();
-        assert!(parse_member(&d[0].1.value).is_err());
+        assert_eq!(
+            parse_member(&d[0].1.value).unwrap_err().code,
+            SigErrorCode::UnsupportedAlgorithm
+        );
+
+        let d = sfv::parse_dictionary(r#"sig=hwk;kty="OKP";crv="Ed25519";x="AA""#).unwrap();
+        assert_eq!(
+            parse_member(&d[0].1.value).unwrap_err().code,
+            SigErrorCode::InvalidKey
+        );
     }
 }

@@ -88,7 +88,7 @@ which `apd` never needs to talk to.
   OIDC tokens** (EKS/GKE/AKS, GitHub Actions), **operator-minted key-bound
   assertions** (`cnf.jwk`/`cnf.jkt` proof-of-possession), and **corporate
   PKI / SPIFFE** via `x5c` certificate chains with CRL revocation and
-  SPIFFE-ID SAN policy. Verifies EdDSA + RS256/384/512 + ES256/384.
+  SPIFFE-ID SAN policy. Verifies Ed25519/EdDSA + RS256/384/512 + ES256/384.
 - **SPIFFE workload identity (new)** — headless agents in k8s / CI / cloud
   enroll with a **SPIFFE SVID** and no human gesture: **JWT-SVIDs** verified
   against a SPIRE trust-bundle JWKS and routed by trust domain (`spiffe` issuer
@@ -144,13 +144,13 @@ See [`research/`](research/) for a full, detail-level reading of the spec family
 |---|---|
 | **Agent tokens** | `aa-agent+jwt`, Ed25519, `cnf.jwk` bound, `≤24h` (config, default 1h), optional `ps` claim, method-derived `assurance` claim |
 | **Enrollment** | composable gates: `token` (admin-minted single-use tokens), **`federated`** (secret-free workload identity: Kubernetes/CI OIDC, operator-minted cnf-bound assertions, corporate-CA `x5c`/SPIFFE, **SPIFFE JWT-SVID**), **`allowlist`** (orchestrator-registered key thumbprints), `open` |
-| **Federated verification** | EdDSA + RS256/RS384/RS512 + ES256/ES384 assertions; OIDC discovery / static JWKS / X.509 chains with CRLs + SAN policy; **SPIFFE JWT-SVID** routed by trust domain; claim policy with wildcards; `cnf.jwk`/`cnf.jkt` proof-of-possession; `jti` replay guard; `embed_claims` stamped into issued tokens |
+| **Federated verification** | Ed25519/EdDSA + RS256/RS384/RS512 + ES256/ES384 assertions; OIDC discovery / static JWKS / X.509 chains with CRLs + SAN policy; **SPIFFE JWT-SVID** routed by trust domain; claim policy with wildcards; `cnf.jwk`/`cnf.jkt` proof-of-possession; `jti` replay guard; `embed_claims` stamped into issued tokens |
 | **Assurance** | first-class `assurance` tier (`none`/`low`/`medium`/`high`) derived from the enrollment method, per-issuer overridable, inherited by sub-agents, protected from `embed_claims` override |
 | **Observability** | OpenTelemetry metrics + traces over OTLP/HTTP (off by default); enrollment/issuance/verify counters, request-duration histogram, per-request server span |
 | **Refresh** | two-key (`jkt-jwt` naming JWT, replay-guarded) and single-key (`hwk`) ceremonies |
 | **Sub-agents** | parent-mediated issuance, `parent_agent` claim, single-level-depth enforced, `exp` capped to parent, inherits embedded claims |
 | **Metadata + JWKS** | `/.well-known/aauth-agent.json`, `/.well-known/jwks.json`, cacheable, key rotation with `kid` |
-| **HTTP signatures** | full RFC 9421 verify per the AAuth profile; `Signature-Error` responses; egress-admitted JWKS discovery |
+| **HTTP signatures** | full RFC 9421 verify per the AAuth profile; fully-specified `Ed25519` keys/tokens (sig-key §3.3, no polymorphic `EdDSA`); `Signature-Error` + `Accept-Signature-Alg` responses; egress-admitted JWKS discovery |
 | **AAuth Events** | subscribe tokens, resource-facing `/events` delivery endpoint, agent `/inbox` (poll + long-poll) |
 | **Admin API** | mint enrollment tokens, manage allowed keys, list/inspect/revoke/reinstate agents (bearer-gated, constant-time) |
 | **Audit** | structured JSON audit events for every enrollment decision, issuance, and revocation (stderr + optional file) |
@@ -274,8 +274,8 @@ cargo clippy --workspace --all-targets      # zero warnings
 
 ## Status & license
 
-**Demo mode.** Implements `draft-hardt-oauth-aauth-protocol-09` and companion
-drafts (`bootstrap-01`, `events-00`, `httpbis-signature-key-05`) as of 2026-06.
+**Demo mode.** Implements `draft-hardt-oauth-aauth-protocol-10` and companion
+drafts (`bootstrap-01`, `events-00`, `httpbis-signature-key-08`) as of 2026-08.
 AAuth is an evolving IETF Internet-Draft family and **not yet a released
 standard**, so `apd` announces demo mode at runtime — a startup banner, a
 `demo_mode_notice` structured log event listing the tracked draft revisions,

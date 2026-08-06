@@ -3,7 +3,14 @@
 //! apd's own tokens are Ed25519-only, but enterprise assertion issuers
 //! (Kubernetes API servers, cloud OIDC, CI providers, corporate PKI) sign with
 //! RSA and ECDSA. Verification uses `ring` (already in the tree via rustls):
-//! supported JWS algs are EdDSA, RS256/RS384/RS512, ES256/ES384.
+//! supported JWS algs are EdDSA/Ed25519, RS256/RS384/RS512, ES256/ES384.
+//!
+//! Note on `EdDSA` vs `Ed25519`: the sig-key §3.3 rule forbidding the
+//! polymorphic `EdDSA` identifier governs *AAuth-native* keys and tokens (which
+//! this crate mints and verifies elsewhere). Inbound third-party IdP assertions
+//! are not AAuth artifacts, so we remain lenient and accept both the polymorphic
+//! `EdDSA` (still emitted by most IdPs today) and the fully-specified `Ed25519`
+//! (RFC 9864), mapping each to an Ed25519 key.
 
 use aauth_core::b64;
 
@@ -75,16 +82,19 @@ impl AnyJwk {
     }
 
     /// Can this key verify signatures made with the given JWS `alg`?
-    /// A JWK that declares its own `alg` (RFC 7517 §4.4) is restricted to it.
+    /// A JWK that declares its own `alg` (RFC 7517 §4.4) is restricted to it —
+    /// except that the polymorphic `EdDSA` and the fully-specified `Ed25519`
+    /// name the same Ed25519 operation, so an IdP JWKS declaring one accepts an
+    /// assertion signed under the other.
     pub fn supports_alg(&self, alg: &str) -> bool {
         if let Some(declared) = &self.alg {
-            if declared != alg {
+            if canonical_alg(declared) != canonical_alg(alg) {
                 return false;
             }
         }
         matches!(
             (alg, &self.key),
-            ("EdDSA", KeyMaterial::Ed25519 { .. })
+            ("EdDSA" | "Ed25519", KeyMaterial::Ed25519 { .. })
                 | ("RS256" | "RS384" | "RS512", KeyMaterial::Rsa { .. })
                 | ("ES256", KeyMaterial::P256 { .. })
                 | ("ES384", KeyMaterial::P384 { .. })
@@ -95,9 +105,11 @@ impl AnyJwk {
     pub fn verify(&self, alg: &str, message: &[u8], signature: &[u8]) -> Result<(), String> {
         use ring::signature as rs;
         match (alg, &self.key) {
-            ("EdDSA", KeyMaterial::Ed25519 { x }) => rs::UnparsedPublicKey::new(&rs::ED25519, x)
-                .verify(message, signature)
-                .map_err(|_| "EdDSA signature verification failed".into()),
+            ("EdDSA" | "Ed25519", KeyMaterial::Ed25519 { x }) => {
+                rs::UnparsedPublicKey::new(&rs::ED25519, x)
+                    .verify(message, signature)
+                    .map_err(|_| "Ed25519 signature verification failed".into())
+            }
             ("RS256", KeyMaterial::Rsa { n, e }) => {
                 rsa_verify(&rs::RSA_PKCS1_2048_8192_SHA256, n, e, message, signature)
             }
@@ -130,6 +142,16 @@ impl AnyJwk {
     }
 }
 
+/// Fold the two spellings of the Ed25519 signature algorithm together so a
+/// JWKS `alg` declaration and an assertion header `alg` compare equal when they
+/// name the same operation. Other algorithm names pass through unchanged.
+fn canonical_alg(alg: &str) -> &str {
+    match alg {
+        "EdDSA" => "Ed25519",
+        other => other,
+    }
+}
+
 fn rsa_verify(
     alg: &'static ring::signature::RsaParameters,
     n: &[u8],
@@ -142,8 +164,12 @@ fn rsa_verify(
         .map_err(|_| "RSA signature verification failed".into())
 }
 
-/// The JWS algorithms federated enrollment accepts.
-pub const SUPPORTED_ALGS: [&str; 6] = ["EdDSA", "RS256", "RS384", "RS512", "ES256", "ES384"];
+/// The JWS algorithms federated enrollment accepts. Both the polymorphic
+/// `EdDSA` and the fully-specified `Ed25519` (RFC 9864) map to Ed25519 keys;
+/// third-party IdP assertions may use either.
+pub const SUPPORTED_ALGS: [&str; 7] = [
+    "EdDSA", "Ed25519", "RS256", "RS384", "RS512", "ES256", "ES384",
+];
 
 #[cfg(test)]
 mod tests {
@@ -201,8 +227,12 @@ mod tests {
         use ed25519_dalek::Signer;
         let msg = b"hello federated world";
         let sig = sk.sign(msg);
+        // Both the polymorphic `EdDSA` and the fully-specified `Ed25519`
+        // identifiers are accepted from third-party IdPs.
         key.verify("EdDSA", msg, &sig.to_bytes()).unwrap();
+        key.verify("Ed25519", msg, &sig.to_bytes()).unwrap();
         assert!(key.verify("EdDSA", b"other", &sig.to_bytes()).is_err());
+        assert!(key.supports_alg("Ed25519"));
     }
 
     #[test]

@@ -106,13 +106,19 @@ keys + `jwks_uri` for this):
   "agent_jkt": "<RFC7638 thumbprint of the agent's current signing key>",
   "iat": …, "exp": "≤ 5 minutes",
   "scope": "data.read data.write",
-  "mission": {"approver": "…", "s256": "…"}   // echo AAuth-Mission if present
+  "mission": {"approver": "…", "s256": "…"},  // echo AAuth-Mission if present
+  "account": "acct_1234"                       // echo the request's account param, if sent
 }
 ```
 
 Deliver it either from your `authorization_endpoint` (`{"resource_token": "…"}`) or as a
 challenge: `401` + `AAuth-Requirement: requirement=auth-token; resource-token="eyJ…"`.
 You may step-up at any time, even against a valid auth token.
+
+**`account` parameter (AAuth-10, §6.1):** if you hold more than one account for the same
+person, accept an OPTIONAL `account` request parameter at your authorization endpoint and
+echo it into the resource token's `account` claim so the downstream PS/AS binds the
+authorization to that account. Absent ⇒ your default account for the person.
 
 Then verify incoming **auth tokens** (`typ aa-auth+jwt`): JWT trust
 (`dwk` ∈ {`aauth-access.json`, `aauth-person.json`}, issuer JWKS, `exp`/`iat`) **plus**

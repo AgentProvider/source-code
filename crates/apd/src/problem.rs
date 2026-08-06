@@ -46,9 +46,13 @@ impl ApiError {
     /// (the header is authoritative; the body mirrors it for humans).
     pub fn from_sig_error(err: SigError) -> ApiError {
         let mut header = format!("error={}", err.code.as_str());
+        let mut headers: Vec<(&'static str, String)> = Vec::new();
         match err.code {
             SigErrorCode::UnsupportedAlgorithm => {
-                header.push_str(", supported_algorithms=(\"ed25519\")");
+                // sig-key §5.4: an unsupported-algorithm response SHOULD carry an
+                // `Accept-Signature-Alg` header naming the algorithms the server
+                // accepts (fully-specified JOSE identifiers). apd is Ed25519-only.
+                headers.push(("accept-signature-alg", aauth_core::jwk::ALG_ED25519.into()));
             }
             SigErrorCode::InvalidInput => {
                 if let Some(required) = &err.required_input {
@@ -61,11 +65,12 @@ impl ApiError {
             }
             _ => {}
         }
+        headers.push(("signature-error", header));
         ApiError {
             status: StatusCode::UNAUTHORIZED,
             error: err.code.as_str().to_string(),
             detail: err.detail,
-            headers: vec![("signature-error", header)],
+            headers,
         }
     }
 
@@ -128,4 +133,35 @@ pub fn empty_status(status: StatusCode) -> Resp {
         .status(status)
         .body(Full::new(Bytes::new()))
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_algorithm_emits_accept_signature_alg() {
+        // sig-key §5.4/§4.2: the response advertises the accepted algorithms via
+        // a dedicated `Accept-Signature-Alg` header (not a Signature-Error member).
+        let err =
+            ApiError::from_sig_error(SigError::new(SigErrorCode::UnsupportedAlgorithm, "nope"));
+        assert_eq!(err.status, StatusCode::UNAUTHORIZED);
+        let get = |name: &str| {
+            err.headers
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("accept-signature-alg"), Some("Ed25519"));
+        assert_eq!(get("signature-error"), Some("error=unsupported_algorithm"));
+    }
+
+    #[test]
+    fn other_errors_have_no_accept_signature_alg() {
+        let err = ApiError::from_sig_error(SigError::new(SigErrorCode::InvalidSignature, "x"));
+        assert!(err
+            .headers
+            .iter()
+            .all(|(n, _)| *n != "accept-signature-alg"));
+    }
 }
