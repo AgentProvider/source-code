@@ -115,7 +115,7 @@ Host: ap.example
 Content-Type: application/json
 Signature-Input: sig=("@method" "@authority" "@path" "signature-key");created=...
 Signature: sig=:...:
-Signature-Key: sig=hwk;kty="OKP";crv="Ed25519";x="<durable pub>"
+Signature-Key: sig=hwk;kty="OKP";crv="Ed25519";x="<durable pub>";alg="Ed25519"
 
 {"enrollment_token":"<one-time>","ps":"https://ps.example","platform":"workload"}
 ```
@@ -139,7 +139,7 @@ lifetime). No refresh tokens exist — you just repeat this.
 **durable** key that delegates to the ephemeral key, and sign the request with
 the **ephemeral** key:
 
-Naming JWT (header `typ:"jkt-s256+jwt"`, `alg:"EdDSA"`, `jwk:<durable pub>`;
+Naming JWT (header `typ:"jkt-s256+jwt"`, `alg:"Ed25519"`, `jwk:<durable pub>`;
 payload `iss:"urn:jkt:sha-256:<thumbprint(durable)>"`, `iat`, `exp≤iat+300`,
 `jti:<random>`, `cnf.jwk:<ephemeral pub>`):
 
@@ -156,7 +156,8 @@ Signature: sig=:<ephemeral-key signature>:
 → `200 {"agent_token":"eyJ...","expires_in":3600,"agent":"aauth:...@..."}`
 
 **Single-key** — sign `POST /agent-token` directly with your durable key using
-`Signature-Key: sig=hwk;...`.
+`Signature-Key: sig=hwk;kty="OKP";crv="Ed25519";x="…";alg="Ed25519"` (the
+`alg="Ed25519"` parameter is required by sig-key §3.3).
 
 Never reuse a naming JWT (`jti` is single-use). When you rotate the ephemeral key
 or the agent token expires, any auth tokens you held for resources die with it —
@@ -315,6 +316,7 @@ Agents can't receive webhooks, so the AP is your inbox:
 | You see | Do |
 |---|---|
 | `401` `Signature-Error: error=expired_jwt` | refresh your agent token, retry |
+| `401` `error=unsupported_algorithm` + `Accept-Signature-Alg: Ed25519` | sign JOSE/JWK `alg` as the fully-specified `Ed25519`, not `EdDSA`; add `alg="Ed25519"` to your `hwk` |
 | `401` `invalid_signature` | check clock skew, covered components, key match |
 | `401` `invalid_input; required_input=(…)` | re-sign covering the listed components (e.g. `content-digest`) |
 | `403` `{"error":"denied"}` on a pending URL | user declined — stop |

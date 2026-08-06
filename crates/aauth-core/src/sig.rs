@@ -19,15 +19,26 @@ use crate::sigkey::SigKeyScheme;
 pub const REQUIRED_COMPONENTS: [&str; 4] = ["@method", "@authority", "@path", "signature-key"];
 
 /// Machine-readable error codes for the `Signature-Error` response header
-/// (`draft-hardt-httpbis-signature-key` §5.4).
+/// (`draft-hardt-httpbis-signature-key` §5.4). This mirrors the spec's error
+/// registry; not every code is emitted by this implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SigErrorCode {
+    /// The signing algorithm is not supported by the recipient. The response
+    /// SHOULD carry an `Accept-Signature-Alg` header naming accepted algorithms.
     UnsupportedAlgorithm,
+    /// The `Signature-Key` scheme (`hwk`/`jwt`/…) is not supported here.
+    UnsupportedScheme,
+    /// A required cached key was not found (JWKS-discovery schemes).
+    CacheMiss,
     InvalidSignature,
     InvalidInput,
     InvalidRequest,
     InvalidKey,
     UnknownKey,
+    /// A discovered JWKS did not declare the expected issuer.
+    IssuerMissing,
+    /// A discovered key's issuer did not match the token's `iss`.
+    IssuerMismatch,
     InvalidJwt,
     ExpiredJwt,
 }
@@ -36,11 +47,15 @@ impl SigErrorCode {
     pub fn as_str(&self) -> &'static str {
         match self {
             SigErrorCode::UnsupportedAlgorithm => "unsupported_algorithm",
+            SigErrorCode::UnsupportedScheme => "unsupported_scheme",
+            SigErrorCode::CacheMiss => "cache_miss",
             SigErrorCode::InvalidSignature => "invalid_signature",
             SigErrorCode::InvalidInput => "invalid_input",
             SigErrorCode::InvalidRequest => "invalid_request",
             SigErrorCode::InvalidKey => "invalid_key",
             SigErrorCode::UnknownKey => "unknown_key",
+            SigErrorCode::IssuerMissing => "issuer_missing",
+            SigErrorCode::IssuerMismatch => "issuer_mismatch",
             SigErrorCode::InvalidJwt => "invalid_jwt",
             SigErrorCode::ExpiredJwt => "expired_jwt",
         }
@@ -330,7 +345,10 @@ pub fn verify_parsed(parsed: &ParsedSignature, key: &Jwk) -> Result<(), SigError
     }
     // RFC 9421 §6.4 / sigkey draft §6.4: the algorithm is derived from the key,
     // but if the signer included an `alg` parameter it MUST be consistent with
-    // the key material. Our only key type is Ed25519 → `ed25519`.
+    // the key material. This is the RFC 9421 HTTP Message Signature identifier
+    // (`ed25519`, lowercase) — a different registry from the JOSE `alg`
+    // (`Ed25519`) that the JWK/`hwk`/token headers carry. Our only key type is
+    // Ed25519 → `ed25519`.
     if let Some(alg) = &parsed.alg {
         if alg != "ed25519" {
             return Err(SigError::new(

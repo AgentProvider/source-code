@@ -195,7 +195,7 @@ pub async fn verify_signature(
             })
         }
         other => Err(ApiError::from_sig_error(SigError::new(
-            SigErrorCode::InvalidKey,
+            SigErrorCode::UnsupportedScheme,
             format!("unsupported Signature-Key scheme for this endpoint: {other:?}"),
         ))),
     }

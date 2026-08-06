@@ -73,8 +73,11 @@ Each `trusted_issuers[]` entry:
 **Assertion requirements** (uniform): `iss` matching an entry (or, for a SPIFFE
 JWT-SVID, a `sub` under a trusted `trust_domain`); `aud` containing the entry's
 audience; `exp` in the future (`iat`/`nbf` sane, 60 s skew); signed with
-**EdDSA, RS256, RS384, RS512, ES256, or ES384**. Claim paths handle dotted key
-names (`kubernetes.io.namespace` resolves the `kubernetes.io` claim).
+**EdDSA/Ed25519, RS256, RS384, RS512, ES256, or ES384**. (Both the polymorphic
+`EdDSA` and the fully-specified `Ed25519` of RFC 9864 are accepted from third-party
+IdPs — the sig-key §3.3 no-polymorphic rule governs AAuth-native tokens, not the
+foreign IdP assertions apd verifies here.) Claim paths handle dotted key names
+(`kubernetes.io.namespace` resolves the `kubernetes.io` claim).
 
 **Key freshness:** remote JWKS (oidc/jwks_uri) are cached with a once-per-minute
 per-issuer refresh floor and a 24 h ceiling, refreshed on unknown `kid`.

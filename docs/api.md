@@ -5,7 +5,8 @@ All endpoints except the well-known documents and `/healthz` require an
 least `@method`, `@authority`, `@path`, `signature-key`, with `created` inside
 the configured window (default 60 s). Errors are RFC 9457 `application/problem+json`
 with a machine-readable `error` member; signature failures also carry a
-`Signature-Error` response header.
+`Signature-Error` response header (and, for `unsupported_algorithm`, an
+`Accept-Signature-Alg: Ed25519` header naming the algorithms apd accepts).
 
 Bodies are JSON. Request-body size is capped by `max_body_bytes` (default 64 KiB).
 
@@ -16,7 +17,8 @@ Agent Provider metadata. `issuer`, `jwks_uri`, optional display fields, and
 `event_endpoint` when events are enabled. `Cache-Control: public, max-age=300`.
 
 ### `GET /.well-known/jwks.json`
-The AP's public signing keys (Ed25519 JWKs, `kid`-tagged, active key first).
+The AP's public signing keys (Ed25519 JWKs, `kid`-tagged, active key first). Each
+key carries the fully-specified `alg: "Ed25519"` required by sig-key §3.3.
 
 ### `GET /healthz`
 `{"status":"ok","mode":"demo","issuer":...,"uptime_secs":N}`.
@@ -28,7 +30,9 @@ status notice); the server also announces this at startup on the CLI and as a
 
 ### `POST /enroll`
 Establish an agent identity, keyed by the **durable key** thumbprint.
-Sign with `Signature-Key: sig=hwk;...` (the durable key).
+Sign with `Signature-Key: sig=hwk;kty="OKP";crv="Ed25519";x="…";alg="Ed25519"`
+(the durable key). Per sig-key §3.3 the `hwk` scheme now carries a required,
+fully-specified `alg="Ed25519"`; an `hwk` missing `alg` is rejected `invalid_key`.
 
 Body: `{ "enrollment_token"?: string, "enrollment_assertion"?: string,
 "ps"?: url, "platform"?: string, "label"?: string }`

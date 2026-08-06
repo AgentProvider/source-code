@@ -82,9 +82,12 @@ flowchart TD
 - `exp` — required, in the future; `iat`/`nbf` — not in the future (60 s skew).
 - `jti` — when present and `single_use_jti` applies, consumed atomically
   (storage `put_if_absent`, TTL = remaining assertion lifetime).
-- **Signature algorithms:** `EdDSA`, `RS256`, `RS384`, `RS512`, `ES256`,
-  `ES384`. RSA and ECDSA verification use `ring` (already in the dependency
-  tree via rustls) — no new cryptography dependencies.
+- **Signature algorithms:** `EdDSA`/`Ed25519`, `RS256`, `RS384`, `RS512`,
+  `ES256`, `ES384`. Both spellings of the Ed25519 algorithm (the polymorphic
+  `EdDSA` and the fully-specified `Ed25519` from RFC 9864) are accepted from
+  third-party IdPs and fold to the same operation. RSA and ECDSA verification use
+  `ring` (already in the dependency tree via rustls) — no new cryptography
+  dependencies.
 
 ### PoP binding (`cnf`)
 

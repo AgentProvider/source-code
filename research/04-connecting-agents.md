@@ -44,7 +44,7 @@ Host: ap.example
 Content-Type: application/json
 Signature-Input: sig=("@method" "@authority" "@path" "signature-key");created=1730217600
 Signature: sig=:...durable key signature...:
-Signature-Key: sig=hwk;kty="OKP";crv="Ed25519";x="<durable pub>"
+Signature-Key: sig=hwk;kty="OKP";crv="Ed25519";x="<durable pub>";alg="Ed25519"
 
 {"enrollment_token": "<one-time token>", "ps": "https://ps.example", "platform": "workload"}
 ```
@@ -56,7 +56,7 @@ the AP finds you by its thumbprint. (In `open` enrollment mode, omit `enrollment
 
 1. Generate ephemeral Ed25519 key pair.
 2. Build the **naming JWT**, signed by the durable key:
-   - header: `{"typ":"jkt-s256+jwt","alg":"EdDSA","jwk":{<durable public JWK>}}`
+   - header: `{"typ":"jkt-s256+jwt","alg":"Ed25519","jwk":{<durable public JWK>}}`
    - payload: `{"iss":"urn:jkt:sha-256:<RFC7638 thumbprint of durable JWK>",
      "iat":now,"exp":now+300,"jti":"<random>","cnf":{"jwk":{<ephemeral public JWK>}}}`
 3. Sign the HTTP request with the **ephemeral** key:

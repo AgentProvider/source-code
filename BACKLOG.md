@@ -20,6 +20,17 @@ guidance) and the wider AAuth family (`draft-hardt-oauth-aauth-protocol`,
 > **Shipped since the first cut of this backlog** (see the ✅ entries below for
 > detail): SPIFFE **JWT-SVID** workload enrollment (A4), assurance-tier claims
 > (A5), and OpenTelemetry metrics + traces over OTLP/HTTP (B1).
+>
+> **Spec alignment (AAuth-10 / signature-key-08):** JOSE/JWK `alg` moved to the
+> fully-specified `Ed25519` (RFC 9864) everywhere apd signs — tokens, published
+> JWKS, `cnf.jwk`, naming JWTs, and the `hwk` scheme (which now carries a
+> required `alg="Ed25519"`); the polymorphic `EdDSA`, `none`, and symmetric algs
+> are rejected on verification. `unsupported_algorithm` responses now emit
+> `Accept-Signature-Alg` (sig-key §4.2). Federated enrollment stays lenient
+> (accepts both `EdDSA` and `Ed25519` from third-party IdPs). The new AAuth-10
+> **`account`** request parameter is resource-side (resource authorization
+> endpoint → resource-token claim) and out of scope for the AP; it is documented
+> in the resource-facing guides, not implemented here.
 
 ---
 

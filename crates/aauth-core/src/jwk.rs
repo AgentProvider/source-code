@@ -1,14 +1,23 @@
 //! JSON Web Keys (Ed25519 / OKP only), JWKS documents, and RFC 7638 thumbprints.
 //!
-//! AAuth mandates EdDSA (Ed25519) support and recommends it everywhere; this
-//! implementation is deliberately Ed25519-only to keep the dependency and
-//! attack surface minimal. See `research/03-http-signatures.md`.
+//! AAuth mandates the fully-specified `Ed25519` signature algorithm and
+//! recommends it everywhere; this implementation is deliberately Ed25519-only
+//! to keep the dependency and attack surface minimal. See
+//! `research/03-http-signatures.md`.
 
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::b64;
+
+/// The JOSE `alg` value for AAuth signatures: the *fully-specified* Ed25519
+/// identifier registered by RFC 9864. The polymorphic `EdDSA` identifier is no
+/// longer accepted (`draft-hardt-httpbis-signature-key` §3.3, Algorithm
+/// Determination). Note this is distinct from the RFC 9421 HTTP Message
+/// Signature algorithm identifier (`ed25519`, lowercase) carried in
+/// `Signature-Input`.
+pub const ALG_ED25519: &str = "Ed25519";
 
 /// A public JWK. Only OKP/Ed25519 is supported; unknown members are ignored
 /// on input and never emitted on output.
@@ -27,14 +36,15 @@ pub struct Jwk {
 }
 
 impl Jwk {
-    /// Public JWK for an Ed25519 verifying key.
+    /// Public JWK for an Ed25519 verifying key. Carries the fully-specified
+    /// `alg` member (`Ed25519`) that sig-key §3.3 now requires on every JWK.
     pub fn from_verifying_key(vk: &VerifyingKey) -> Self {
         Jwk {
             kty: "OKP".into(),
             crv: "Ed25519".into(),
             x: b64::encode(vk.as_bytes()),
             kid: None,
-            alg: None,
+            alg: Some(ALG_ED25519.into()),
             use_: None,
         }
     }
@@ -66,14 +76,17 @@ impl Jwk {
         Ok(b64::encode(&Sha256::digest(canonical.as_bytes())))
     }
 
-    /// Copy with only the cryptographic members (for `cnf.jwk` embedding).
+    /// Copy with only the cryptographic members plus the required `alg` (for
+    /// `cnf.jwk` embedding). Per sig-key §3.3 an embedded JWK MUST carry a
+    /// fully-specified `alg`; the RFC 7638 thumbprint ignores it (crv/kty/x
+    /// only), so binding-by-thumbprint is unaffected.
     pub fn public_only(&self) -> Jwk {
         Jwk {
             kty: self.kty.clone(),
             crv: self.crv.clone(),
             x: self.x.clone(),
             kid: None,
-            alg: None,
+            alg: Some(ALG_ED25519.into()),
             use_: None,
         }
     }
@@ -152,7 +165,7 @@ mod tests {
             crv: "Ed25519".into(),
             x: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".into(),
             kid: Some("some-kid".into()),
-            alg: Some("EdDSA".into()),
+            alg: Some("Ed25519".into()),
             use_: Some("sig".into()),
         };
         let t1 = jwk.thumbprint().unwrap();

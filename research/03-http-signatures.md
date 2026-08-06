@@ -1,7 +1,7 @@
 # HTTP Message Signatures & Signature-Key — Implementation Notes
 
 > Sources: RFC 9421 (HTTP Message Signatures), RFC 8941 (Structured Fields),
-> `draft-hardt-httpbis-signature-key-05`, and the AAuth protocol's
+> `draft-hardt-httpbis-signature-key-08`, and the AAuth protocol's
 > "HTTP Message Signatures Profile" section. This is the wire-level layer every AAuth
 > party implements; the AP verifies these signatures on all ceremony endpoints and on
 > event deliveries.
@@ -61,9 +61,15 @@ Details that bite:
   `invalid_signature`. `expires` optional; if present and past → reject.
 - When `AAuth-Mission` is sent, `aauth-mission` MUST be covered. When
   `Authorization: AAuth <opaque>` is sent, `authorization` MUST be covered.
-- Algorithms: **Ed25519 (EdDSA) MUST**; ECDSA P-256 (deterministic) SHOULD. Algorithm is
-  derived from the *key material* (kty/crv or JWK `alg`), never trusted from an `alg`
-  hint alone; if `Signature-Input` carries `alg` it must be consistent with the key.
+- Algorithms: **Ed25519 MUST**; ECDSA P-256 SHOULD. Every JWK MUST carry a
+  *fully-specified* `alg` — the JOSE identifier `Ed25519` (RFC 9864), **not** the
+  polymorphic `EdDSA`, and never `none`/symmetric (sig-key §3.3, Algorithm
+  Determination). A verifier MUST reject a JWK/token whose `alg` is absent or
+  polymorphic, and MUST NOT infer the algorithm from other key parameters.
+  Two distinct `alg` namespaces coexist: the **JOSE** `alg` (`Ed25519`, in JWK
+  members, JWT headers, and the `hwk` scheme) and the **RFC 9421 HTTP Message
+  Signature** `alg` (`ed25519`, lowercase, in `Signature-Input`) — if
+  `Signature-Input` carries the latter it must be consistent with the key.
 - Replay: `created` window is the primary defense; verifiers MAY keep a short-lived
   dedupe cache keyed by `(key-thumbprint, created, @method, @authority, @path)` for
   state-changing endpoints. No nonces in the profile.
@@ -72,7 +78,7 @@ Details that bite:
 
 | scheme | key comes from | AP usage |
 |---|---|---|
-| `hwk` | inline JWK params (`kty`,`crv`,`x`[,`y`]/`n`,`e`); no `alg`, no `kid` | enrollment; single-key refresh |
+| `hwk` | inline JWK params (`kty`,`crv`,`x`) **plus a required `alg="Ed25519"`** (sig-key §3.3); no `kid` | enrollment; single-key refresh |
 | `jkt-jwt` | naming JWT: header `jwk` = durable key, `iss = urn:jkt:sha-256:<thumb>`, `cnf.jwk` = ephemeral key; HTTP sig by ephemeral key | two-key refresh |
 | `jwt` | JWT's `cnf.jwk`; JWT verified via `{iss}/.well-known/{dwk}` JWKS | subscribe/inbox/sub-agent endpoints (agent token); **AAuth mandates agents use only this scheme toward resources/PS/AS** |
 | `jwt` (dwk-without-cnf extension, events draft) | JWT has `dwk` but no `cnf` → the JWT's own signing key (by header `kid` from issuer JWKS) also verifies the HTTP signature | event deliveries (`aa-event+jwt`) to our `event_endpoint` |
@@ -106,19 +112,28 @@ body SHOULD be problem+json with `type: urn:ietf:params:sig-error:<code>`. Statu
 generally, 401 for recoverable (`unsupported_algorithm`, `invalid_input`). AAuth says
 signature verification failures on its endpoints are 401 + Signature-Error; we use 401.
 
-| error | extra members | when |
+| error | extra | when |
 |---|---|---|
-| `unsupported_algorithm` | `supported_algorithms=("ed25519")` REQUIRED | key type/alg we don't do |
+| `unsupported_algorithm` | `Accept-Signature-Alg: Ed25519` response header (SHOULD) | key/alg we don't do; absent, polymorphic (`EdDSA`), or unsupported `alg` |
+| `unsupported_scheme` | — | a `Signature-Key` scheme this endpoint doesn't accept |
 | `invalid_signature` | — | missing sig headers, bad crypto, `created` outside window |
 | `invalid_input` | `required_input=(...)` SHOULD | covered components missing required ones |
 | `invalid_request` | — | malformed non-signature aspects |
-| `invalid_key` | — | unparseable/untrusted key material |
+| `invalid_key` | — | unparseable/untrusted key material (incl. `hwk` missing `alg`) |
 | `unknown_key` | — | `kid` not in issuer JWKS (after one refetch) |
+| `issuer_missing` / `issuer_mismatch` | — | discovered JWKS lacks / disagrees with the token issuer |
+| `cache_miss` | — | a required cached key was not found |
 | `invalid_jwt` | — | malformed JWT / JWT signature failure |
 | `expired_jwt` | — | JWT `exp` past |
 
-`403` (policy denial after successful authn) MUST NOT carry Signature-Error or
-Accept-Signature.
+The `unsupported_algorithm` response no longer uses a `supported_algorithms`
+member inside `Signature-Error`; sig-key §5.4 now defines a dedicated
+`Accept-Signature-Alg` response header (§4.2) naming the fully-specified JOSE
+algorithms the server accepts (`apd` is Ed25519-only → `Accept-Signature-Alg:
+Ed25519`).
+
+`403` (policy denial after successful authn) MUST NOT carry Signature-Error,
+Accept-Signature, or Accept-Signature-Alg.
 
 ## 6. Accept-Signature `sigkey` parameter (server → client challenge)
 
@@ -129,6 +144,10 @@ kind of Signature-Key to bring: `jkt` (pseudonymous: hwk/jkt-jwt), `uri`
 which scheme each ceremony endpoint expects (documented in `docs/api.md`), and a
 signature failure is reported via the `Signature-Error` header. Emitting
 `Accept-Signature` challenges is a possible future addition.
+
+`apd` **does** emit the narrower `Accept-Signature-Alg` header (sig-key §4.2) on
+`unsupported_algorithm` responses, advertising the fully-specified algorithms it
+accepts (`Ed25519`).
 
 ## 7. RFC 8941 structured fields — the subset we need
 
@@ -145,7 +164,8 @@ ignore unknown dictionary members and unknown parameters; reject on syntax error
 - RFC 7638 thumbprint: SHA-256 over the JSON object with **only required members**
   (`crv`,`kty`,`x` for OKP — lexicographic order, no whitespace), base64url unpadded.
   Exact serialization for OKP: `{"crv":"Ed25519","kty":"OKP","x":"..."}`.
-- JWKS: `{"keys":[{...,"kid":"...","alg":"EdDSA","use":"sig"}]}`.
+- JWKS: `{"keys":[{...,"kid":"...","alg":"Ed25519","use":"sig"}]}` — the
+  fully-specified `alg` is REQUIRED on every published key (sig-key §3.3).
 - base64url everywhere: unpadded, `-_` alphabet. Reject padding/invalid chars strictly
   in tokens.
 

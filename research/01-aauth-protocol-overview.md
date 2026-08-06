@@ -34,8 +34,10 @@ org-wide AP+PS+AS bundles). Collocation never changes the wire protocol.
 All AAuth tokens are JWTs verified by fetching the issuer's JWKS via
 `{iss}/.well-known/{dwk}` where `dwk` is a claim in the token naming the well-known
 metadata document (`aauth-agent.json`, `aauth-resource.json`, `aauth-person.json`,
-`aauth-access.json`). `alg: none` MUST be rejected. EdDSA (Ed25519) is RECOMMENDED
-everywhere.
+`aauth-access.json`). Every JWK and JWT header MUST carry a **fully-specified**
+`alg` — the JOSE `Ed25519` identifier (RFC 9864); `alg: none`, the polymorphic
+`EdDSA`, and symmetric algorithms MUST be rejected (sig-key §3.3). `Ed25519` is
+RECOMMENDED everywhere.
 
 ### 3.1 Agent token — `typ: aa-agent+jwt` (issued by the AP — what *we* implement)
 
@@ -71,7 +73,15 @@ Verification (by any receiver):
 Claims: `iss` (resource URL), `dwk: aauth-resource.json`, `aud` (PS URL or AS URL),
 `jti`, `agent` (agent identifier), `agent_jkt` (RFC 7638 JWK thumbprint of the agent's
 current key), `iat`, `exp` (SHOULD NOT exceed **5 minutes**), `scope` (space-separated).
-Optional: `mission {approver, s256}`, `interaction {url, code}`.
+Optional: `mission {approver, s256}`, `interaction {url, code}`, `account` (echoes the
+request's `account` parameter — below).
+
+**`account` request parameter (AAuth-10, §6.1):** when a resource may hold more than
+one account for the same person, the agent MAY send an OPTIONAL `account` parameter to
+the resource's authorization endpoint naming which account (a string in the resource's
+own namespace) the authorization is for; the resource echoes it into the resource
+token's `account` claim. This is a **resource-side** parameter — `apd`, being the Agent
+Provider, neither consumes it nor issues resource tokens.
 
 The resource token is how a resource cryptographically asserts *what is being requested* —
 it prevents confused-deputy attacks and gives the resource a voice in every (re-)authorization.

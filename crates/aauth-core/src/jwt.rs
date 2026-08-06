@@ -1,13 +1,16 @@
-//! Compact JWT (JWS) signing and verification, EdDSA (Ed25519) only.
+//! Compact JWT (JWS) signing and verification, Ed25519 only.
 //!
-//! `alg: none` and any non-EdDSA algorithm are rejected at verification, per
-//! the AAuth requirement that implementations MUST NOT accept `none`.
+//! The header `alg` is the *fully-specified* `Ed25519` identifier (RFC 9864).
+//! `alg: none`, the polymorphic `EdDSA` identifier, and any symmetric algorithm
+//! are rejected at verification, per AAuth §5.2.2 and sig-key §3.3 (Algorithm
+//! Determination): a verifier MUST reject a token whose `alg` is absent,
+//! polymorphic, or unsupported.
 
 use ed25519_dalek::{Signature, Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 
 use crate::b64;
-use crate::jwk::Jwk;
+use crate::jwk::{Jwk, ALG_ED25519};
 
 /// JOSE header members AAuth uses. Unknown members are ignored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,9 +83,10 @@ pub fn decode(token: &str) -> Result<DecodedJwt, JwtError> {
 }
 
 /// Verify a decoded JWT's signature against an Ed25519 JWK.
-/// Enforces `alg == EdDSA`.
+/// Enforces the fully-specified `alg == Ed25519` (rejecting `none`, the
+/// polymorphic `EdDSA`, and everything else) per sig-key §3.3.
 pub fn verify_with_jwk(jwt: &DecodedJwt, key: &Jwk) -> Result<(), JwtError> {
-    if jwt.header.alg != "EdDSA" {
+    if jwt.header.alg != ALG_ED25519 {
         return Err(JwtError::UnsupportedAlgorithm);
     }
     let vk = key.verifying_key().map_err(|_| JwtError::BadSignature)?;
@@ -96,7 +100,7 @@ pub fn verify_with_jwk(jwt: &DecodedJwt, key: &Jwk) -> Result<(), JwtError> {
         .map_err(|_| JwtError::BadSignature)
 }
 
-/// Sign a JWT with EdDSA. `typ` goes into the header; `kid`/`jwk` optional.
+/// Sign a JWT with Ed25519. `typ` goes into the header; `kid`/`jwk` optional.
 pub fn sign(
     typ: &str,
     kid: Option<&str>,
@@ -105,7 +109,7 @@ pub fn sign(
     key: &SigningKey,
 ) -> String {
     let header = JoseHeader {
-        alg: "EdDSA".into(),
+        alg: ALG_ED25519.into(),
         typ: Some(typ.into()),
         kid: kid.map(|s| s.into()),
         jwk: header_jwk.cloned(),
@@ -176,6 +180,38 @@ mod tests {
             verify_with_jwk(&decoded, &jwk),
             Err(JwtError::UnsupportedAlgorithm)
         );
+    }
+
+    #[test]
+    fn polymorphic_eddsa_header_rejected() {
+        // sig-key §3.3 / AAuth §5.2.2: the polymorphic `EdDSA` identifier MUST
+        // NOT be accepted even when the signature itself is a valid Ed25519
+        // signature — the header must be the fully-specified `Ed25519`.
+        let sk = generate_signing_key();
+        let jwk = Jwk::from_verifying_key(&sk.verifying_key());
+        let h = crate::b64::encode(br#"{"alg":"EdDSA","typ":"aa-agent+jwt"}"#);
+        let p = crate::b64::encode(br#"{"iss":"https://x.example"}"#);
+        let signing_input = format!("{h}.{p}");
+        let sig = sk.sign(signing_input.as_bytes());
+        let token = format!("{signing_input}.{}", crate::b64::encode(&sig.to_bytes()));
+        let decoded = decode(&token).unwrap();
+        assert_eq!(
+            verify_with_jwk(&decoded, &jwk),
+            Err(JwtError::UnsupportedAlgorithm)
+        );
+    }
+
+    #[test]
+    fn sign_emits_fully_specified_alg() {
+        let sk = generate_signing_key();
+        let token = sign(
+            "aa-agent+jwt",
+            None,
+            None,
+            &serde_json::json!({"a": 1}),
+            &sk,
+        );
+        assert_eq!(decode(&token).unwrap().header.alg, "Ed25519");
     }
 
     /// RFC 8037 A.4 test vector: Ed25519 signing of "Example of Ed25519 signing".
