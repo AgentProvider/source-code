@@ -1,0 +1,170 @@
+# Helm values — public developer sandbox Agent Provider.
+#
+# Install:
+#   helm install apd-sandbox oci://ghcr.io/agentprovider/charts/apd \
+#     --version 0.2.0 --namespace apd-sandbox \
+#     --values deploy/sandbox/values-sandbox.yaml
+#
+# Read docs/runbooks/sandbox-deployment.md before you deploy.
+# Create both secrets first. See runbook section 7, steps 2 and 3.
+
+# --------------------------------------------------------------- identity
+# PERMANENT. This value goes into the `iss` claim of every token, and into
+# every agent identifier (aauth:local@sandbox.agentprovider.dev).
+# A change breaks every issued token and every developer integration.
+# It MUST equal the host that the ingress serves.
+issuer: "https://sandbox.agentprovider.dev"
+
+# --------------------------------------------------------------- workload
+replicaCount: 1 # >1 needs storage.backend=redis. The sandbox does not need it.
+
+image:
+  repository: ghcr.io/agentprovider/apd
+  tag: "0.2.0" # Pin the version. Do not use `latest`.
+  pullPolicy: IfNotPresent
+
+# --------------------------------------------------------------- apd config
+config:
+  # 5 minutes. Short on purpose: a developer then exercises the refresh path
+  # during a normal test session, and not after one hour.
+  agentTokenTtlSecs: 300
+
+  # RFC 9421 `created` window. Needs correct clocks on every node.
+  signatureWindowSecs: 60
+
+  allowPsOverride: true
+
+  enrollment:
+    # Open enrolment. No credential. This is the purpose of a sandbox.
+    # Abuse control is the ingress rate limit. See the annotations below.
+    methods: ["open"]
+    defaultPs: ""
+
+  events:
+    # Off in the first release. Events add outbound fetches and more surface.
+    # Turn on when a developer needs to test the inbox.
+    enabled: false
+
+  auditLogFile: "" # stderr only. The log collector reads stderr.
+
+  # NEVER true. This is a public HTTPS service.
+  insecureDevMode: false
+
+# Keys that the chart does not surface are deep-merged here.
+extraConfig:
+  metadata:
+    name: "AAuth Sandbox Agent Provider"
+    description: "Public sandbox for AAuth development. Ephemeral. Not for production use."
+    documentation_uri: "https://agentprovider.dev/docs/"
+  telemetry:
+    enabled: true
+    endpoint: "http://otel-collector.observability:4318"
+    service_name: "apd-sandbox"
+    metric_interval_secs: 30
+
+# --------------------------------------------------------------- storage
+storage:
+  # Ephemeral by design.
+  # `apd` writes agent records with no expiry time. Open enrolment on a public
+  # network would therefore grow without limit. Memory storage plus a daily
+  # restart bounds the data. See runbook section 3.1.
+  # A restart removes every sandbox agent. Publish this to developers.
+  backend: memory
+
+# --------------------------------------------------------------- secrets
+# Create both secrets before you install. Never put the values in this file.
+keys:
+  # kubectl -n apd-sandbox create secret generic apd-sandbox-keys \
+  #   --from-file=apd-keys.json
+  existingSecret: "apd-sandbox-keys"
+  existingSecretKey: "apd-keys.json"
+
+admin:
+  enabled: true
+  # kubectl -n apd-sandbox create secret generic apd-sandbox-admin \
+  #   --from-literal=admin-token="$(openssl rand -hex 32)"
+  existingSecret: "apd-sandbox-admin"
+  existingSecretKey: "admin-token"
+
+# --------------------------------------------------------------- networking
+service:
+  type: ClusterIP
+  port: 8420
+
+ingress:
+  enabled: true
+  className: nginx
+  host: sandbox.agentprovider.dev # MUST match `issuer`.
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: true
+    secretName: apd-sandbox-tls
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+    # CRITICAL: the signature covers @method, @authority, and @path.
+    # A proxy that rewrites the host or the path breaks every request.
+    # Do not add a rewrite-target annotation.
+    nginx.ingress.kubernetes.io/upstream-vhost: sandbox.agentprovider.dev
+
+    # /inbox long-polls for up to 50 s. Allow more than that.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "75"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "75"
+
+    # Matches apd max_body_bytes (64 KiB).
+    nginx.ingress.kubernetes.io/proxy-body-size: "64k"
+
+    # Abuse control. apd has no rate limiter by design.
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+
+    # Block the admin API. It uses a bearer token, and not an AAuth signature.
+    # Reach it with `kubectl port-forward` only.
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      location ~* "^/admin" {
+        deny all;
+        return 403;
+      }
+
+# --------------------------------------------------------------- resources
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false # Scaling needs Redis. Keep one replica.
+
+# --------------------------------------------------------------- hardening
+# These match the distroless nonroot image (uid 65532).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 10
