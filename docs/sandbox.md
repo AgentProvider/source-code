@@ -195,7 +195,8 @@ plugins:
   - id: dev.mcpg.identity.aauth
     class: identity_provider
     source:
-      oci: "identity-aauth:<version>"
+      # Pin a published version rather than tracking the latest tag.
+      oci: "ghcr.io/mcpg-dev/plugins/identity-aauth"
     granted_capabilities:
       - network_outbound              # needed for metadata + JWKS discovery
     config:
@@ -294,5 +295,7 @@ Not committed, and not yet available:
 
 - Persistent agents via GitHub sign-in, with a per-user quota
 - Events and `/inbox` support
-- A request inspector that shows the signature base string for debugging
-- A "test my server" tool for MCP resource authors
+
+For debugging and for testing your own server, look at
+[agentd](https://agentd.dev) and [mcpg](https://mcpg.dev) first. Between them
+they already cover both jobs.
