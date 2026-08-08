@@ -51,6 +51,41 @@ description: apd issues short-lived, signed identities to your AI agents — no 
   </div>
 </section>
 
+<!-- ============================================================ sandbox -->
+<section class="section" id="sandbox">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Hosted sandbox</span>
+      <h2>Try it without running anything.</h2>
+      <p>Build and test AAuth agents against a live provider — no local setup, no sign-up, ephemeral by design.</p>
+    </div>
+
+    <div class="code">
+      <div class="code-head"><span class="tag">bash</span><button class="copy" data-copy="cmd-sandbox" type="button"></button></div>
+<pre id="cmd-sandbox"><span class="c"># the live provider — open enrollment, no credential needed</span>
+<span class="p">$</span> curl -s https://sandbox.agentprovider.dev/.well-known/aauth-agent.json
+
+<span class="c"># the keys every verifier checks your tokens against</span>
+<span class="p">$</span> curl -s https://sandbox.agentprovider.dev/.well-known/jwks.json</pre>
+    </div>
+
+    <div class="hero-actions" style="margin-top:22px">
+      <a class="btn btn-primary" href="{{ '/docs/sandbox.html' | relative_url }}">
+        Use the sandbox
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      </a>
+      <a class="btn btn-ghost" href="#install">Or run your own</a>
+    </div>
+
+    <div style="margin-top:26px">
+      <p class="demo-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9l-8 13.9A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3.2l-8-13.9a2 2 0 0 0-3.4 0z"/></svg>
+        <span><b>Development only.</b> Sandbox tokens have no production value. Agents are wiped daily at 03:00&nbsp;UTC and on every redeploy — treat “agent not found” as normal and re-enroll. No SLA, no accounts, no data retention.</span>
+      </p>
+    </div>
+  </div>
+</section>
+
 <!-- ============================================================ install -->
 <section class="section" id="install">
   <div class="wrap">
@@ -214,6 +249,12 @@ description: apd issues short-lived, signed identities to your AI agents — no 
       <p>Hands-on guides for both sides of the exchange, plus operations and the protocol notes behind the code.</p>
     </div>
     <div class="doclinks">
+      <a class="doclink" href="{{ '/docs/sandbox.html' | relative_url }}">
+        <span class="k">no setup required</span>
+        <h3>Hosted sandbox</h3>
+        <p>A live provider at <code>sandbox.agentprovider.dev</code> — open enrollment, 5-minute tokens, ephemeral by design.</p>
+        <span class="go">Open guide <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
       <a class="doclink" href="{{ '/docs/guide-ai-agent-auth.html' | relative_url }}">
         <span class="k">for agent developers</span>
         <h3>Build an agent</h3>

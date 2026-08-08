@@ -2,6 +2,8 @@
 <aside class="sidebar" aria-label="Documentation">
   <div class="group">
     <p class="g-title">Get started</p>
+    <a href="{{ '/docs/' | relative_url }}" {% if u == '/docs/' %}class="active"{% endif %}>Overview</a>
+    <a href="{{ '/docs/sandbox.html' | relative_url }}" {% if u contains 'sandbox' %}class="active"{% endif %}>Hosted sandbox</a>
     <a href="{{ '/docs/deployment.html' | relative_url }}" {% if u contains 'deployment' %}class="active"{% endif %}>Install &amp; deploy</a>
     <a href="{{ '/docs/guide-ai-agent-auth.html' | relative_url }}" {% if u contains 'guide-ai-agent-auth' %}class="active"{% endif %}>Build an agent</a>
     <a href="{{ '/docs/guide-mcp-server-auth.html' | relative_url }}" {% if u contains 'guide-mcp-server-auth' %}class="active"{% endif %}>Protect an MCP server</a>

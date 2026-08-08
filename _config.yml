@@ -32,6 +32,11 @@ defaults:
 # Keep the published site to the landing + prose docs. Everything below is
 # source, build, or planning material.
 exclude:
+  # Internal operations material — deployment runbooks and environment values.
+  # Not for the public site.
+  - docs/runbooks/
+  - deploy/
+  - BACKLOG.md
   - README.md
   - Cargo.toml
   - Cargo.lock
