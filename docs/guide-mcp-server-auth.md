@@ -76,7 +76,7 @@ flowchart TD
      private/loopback IPs, size/time caps) — these URLs come from the token.
    - `exp` in the future, `iat` not in the future.
 4. **Verify the HTTP signature** with `cnf.jwk` from the token.
-5. Your **principal is the `sub`** (e.g. `aauth:k7q3p9n2@ap.example`) — stable
+5. Your **principal is the `sub`** (e.g. `aauth:k7q3p9n2@sandbox.agentprovider.dev`) — stable
    across the agent's key rotations. Key your ACLs, per-agent rate limits, and
    audit off it, exactly like an API-key id. `iss` tells you *which AP* vouches
    for it — trust APs per your policy.

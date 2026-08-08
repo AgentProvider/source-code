@@ -36,7 +36,7 @@ headers and covers **at least** `@method`, `@authority`, `@path`,
 
 ```http
 POST /agent-token HTTP/1.1
-Host: ap.example
+Host: sandbox.agentprovider.dev
 Signature-Input: sig=("@method" "@authority" "@path" "signature-key");created=1730217600
 Signature: sig=:<base64 ed25519 signature>:
 Signature-Key: sig=jwt;jwt="<your agent token>"
@@ -47,7 +47,7 @@ covered component then the params line, joined with `\n` (no trailing newline):
 
 ```
 "@method": POST
-"@authority": ap.example
+"@authority": sandbox.agentprovider.dev
 "@path": /agent-token
 "signature-key": sig=jwt;jwt="<your agent token>"
 "@signature-params": ("@method" "@authority" "@path" "signature-key");created=1730217600
@@ -111,7 +111,7 @@ Sign `POST {AP}/enroll` with your **durable key** using the `hwk` scheme:
 
 ```http
 POST /enroll HTTP/1.1
-Host: ap.example
+Host: sandbox.agentprovider.dev
 Content-Type: application/json
 Signature-Input: sig=("@method" "@authority" "@path" "signature-key");created=...
 Signature: sig=:...:
@@ -122,7 +122,7 @@ Signature-Key: sig=hwk;kty="OKP";crv="Ed25519";x="<durable pub>";alg="Ed25519"
 
 (or `{"enrollment_assertion":"<JWT>", ...}` for the federated path)
 
-→ `201 {"agent":"aauth:k7q3p9n2@ap.example"}`. That `aauth:local@domain` string
+→ `201 {"agent":"aauth:k7q3p9n2@sandbox.agentprovider.dev"}`. That `aauth:local@domain` string
 is your stable identity. Store only your durable key — the AP finds you by its
 thumbprint. Set `ps` if you'll use a Person Server for user-scoped auth.
 
@@ -145,7 +145,7 @@ payload `iss:"urn:jkt:sha-256:<thumbprint(durable)>"`, `iat`, `exp≤iat+300`,
 
 ```http
 POST /agent-token HTTP/1.1
-Host: ap.example
+Host: sandbox.agentprovider.dev
 Signature-Key: sig=jkt-jwt;jwt="<naming JWT>"
 Signature-Input: sig=("@method" "@authority" "@path" "signature-key");created=...
 Signature: sig=:<ephemeral-key signature>:

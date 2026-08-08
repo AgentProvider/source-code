@@ -40,7 +40,7 @@ Operator mints an enrollment token: `apd admin` API or CLI (see `docs/api.md`). 
 
 ```http
 POST /enroll HTTP/1.1
-Host: ap.example
+Host: sandbox.agentprovider.dev
 Content-Type: application/json
 Signature-Input: sig=("@method" "@authority" "@path" "signature-key");created=1730217600
 Signature: sig=:...durable key signature...:
@@ -49,7 +49,7 @@ Signature-Key: sig=hwk;kty="OKP";crv="Ed25519";x="<durable pub>";alg="Ed25519"
 {"enrollment_token": "<one-time token>", "ps": "https://ps.example", "platform": "workload"}
 ```
 
-→ `201 {"agent": "aauth:k7q3p9n2@ap.example"}`. Store nothing except your durable key —
+→ `201 {"agent": "aauth:k7q3p9n2@sandbox.agentprovider.dev"}`. Store nothing except your durable key —
 the AP finds you by its thumbprint. (In `open` enrollment mode, omit `enrollment_token`.)
 
 ## 3. Get / refresh an agent token
@@ -63,7 +63,7 @@ the AP finds you by its thumbprint. (In `open` enrollment mode, omit `enrollment
 
 ```http
 POST /agent-token HTTP/1.1
-Host: ap.example
+Host: sandbox.agentprovider.dev
 Content-Type: application/json
 Signature-Input: sig=("@method" "@authority" "@path" "signature-key");created=...
 Signature: sig=:...ephemeral key signature...:
@@ -72,7 +72,7 @@ Signature-Key: sig=jkt-jwt;jwt="<naming JWT>"
 {}
 ```
 
-→ `200 {"agent_token":"eyJ...","expires_in":3600,"agent":"aauth:k7q3p9n2@ap.example"}`
+→ `200 {"agent_token":"eyJ...","expires_in":3600,"agent":"aauth:k7q3p9n2@sandbox.agentprovider.dev"}`
 
 Refresh proactively (e.g. at 90% of lifetime). Every auth token you hold dies with the
 key it's bound to, so refresh agent token → re-obtain auth tokens (there are no refresh
@@ -154,7 +154,7 @@ Parent (a top-level agent) mints identities for its workers via this AP:
 2. Parent: `POST /subagent-token` signed with the parent's agent token
    (`Signature-Key: sig=jwt`), body
    `{"discriminator":"search1","cnf_jwk":{...}}`.
-3. AP returns an agent token with `sub = aauth:{parent_local}+search1@ap.example`,
+3. AP returns an agent token with `sub = aauth:{parent_local}+search1@sandbox.agentprovider.dev`,
    `parent_agent = <parent id>`, `exp` capped to the parent token's `exp`.
 
 Rules the ecosystem enforces (and this AP enforces at issuance): one level deep only;

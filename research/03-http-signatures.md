@@ -31,7 +31,7 @@ with `\n` (no trailing newline). Component identifiers are serialized as SF stri
 
 ```
 "@method": POST
-"@authority": ap.example
+"@authority": sandbox.agentprovider.dev
 "@path": /agent-token
 "signature-key": sig=jwt;jwt="eyJ..."
 "@signature-params": ("@method" "@authority" "@path" "signature-key");created=1730217600

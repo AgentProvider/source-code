@@ -33,7 +33,7 @@ On a signed request with `Signature-Key: sig=jwt;jwt="<agent token>"`:
      caps).
    - `exp` future, `iat` not future; `iss` a valid server identifier.
 4. Verify the HTTP signature with `cnf.jwk` from the token.
-5. Your principal is `sub` (e.g. `aauth:k7q3p9n2@ap.example`) — stable across key
+5. Your principal is `sub` (e.g. `aauth:k7q3p9n2@sandbox.agentprovider.dev`) — stable across key
    rotations. Key it into your ACLs / rate limits / audit exactly like an API-key id.
    `(iss)` tells you which AP vouches for it; trust APs accordingly.
 6. `ps` claim (if present) is where you'd send a resource token for three-party mode.
