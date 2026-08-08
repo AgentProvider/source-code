@@ -173,11 +173,6 @@ at your own resource. Because enrollment is open, this takes seconds.
 [agentd](https://agentd.dev) works well as that test agent — point it at the
 sandbox, then at your server.
 
-If you would rather not write verification code at all, an MCP gateway can do it
-in front of your server. [mcpg](https://mcpg.dev) resolves AAuth agent identity
-on inbound requests and maps it to a gateway principal, so your server keeps its
-existing handlers.
-
 **4. Handle `alg: Ed25519`, not `EdDSA`.** See [above](#the-ed25519-rule).
 
 Your principal is the token's `sub` claim. It is stable across the agent's key
@@ -185,6 +180,50 @@ rotations. Key your ACLs on it, exactly like an API-key id.
 
 The full verification walkthrough is in
 [Protect an MCP server](guide-mcp-server-auth.md).
+
+### Or let a gateway verify for you
+
+You do not have to write any of it. [mcpg](https://mcpg.dev) is an MCP gateway
+that implements the resource side of AAuth. It verifies the per-request agent
+signature and maps the agent principal `aauth:<local>@<domain>` into its own
+identity context, so your tools keep their existing handlers.
+
+Point its trusted issuer at the sandbox and you have a working end-to-end path:
+
+```yaml
+plugins:
+  - id: dev.mcpg.identity.aauth
+    class: identity_provider
+    source:
+      oci: "identity-aauth:<version>"
+    granted_capabilities:
+      - network_outbound              # needed for metadata + JWKS discovery
+    config:
+      trusted_issuers:
+        - https://sandbox.agentprovider.dev   # exact iss — no trailing slash
+      signature_window_secs: 60
+
+mcp:
+  capabilities:
+    tools:
+      - name: example.echo
+        governance:
+          minimum_trust: verified     # require a signed agent identity
+        backend:
+          kind: mock
+```
+
+Three things are worth knowing:
+
+- **`trusted_issuers` is an exact `iss` match.** Use the scheme, and no trailing
+  slash and no path — the same server-identifier rule the provider enforces.
+- **`minimum_trust: verified`** means an unsigned caller does not merely get
+  rejected. The tool does not appear in `tools/list` at all.
+- **If a proxy terminates TLS and rewrites `Host`, set `expected_authority`.**
+  Agents sign `@authority`, so it must match what the agent signed. Keep the MCP
+  path stable too, because agents sign `@path`.
+
+Full configuration is in the [mcpg documentation](https://mcpg.dev).
 
 ## Working implementations
 
@@ -196,7 +235,7 @@ protocol yourself:
 |---|---|---|
 | [agentd](https://agentd.dev) | Agent runtime | **Client** — enrolls, holds an Ed25519 key, signs every MCP request ([AAuth guide](https://agentd.dev/docs/aauth)) |
 | **apd** — this project | Agent Provider | **Issuer** — enrolls agents and mints agent tokens |
-| [mcpg](https://mcpg.dev) | MCP gateway | **Resource** — verifies agent identity on inbound MCP requests |
+| [mcpg](https://mcpg.dev) | MCP gateway | **Resource** — verifies the per-request agent signature and maps `aauth:local@domain` to a gateway principal ([sample](#or-let-a-gateway-verify-for-you)) |
 
 ```mermaid
 flowchart LR
@@ -208,9 +247,13 @@ flowchart LR
 Step 3 happens once, and then the gateway caches the key set. Verification does
 not call the provider on every request.
 
-All three are independent implementations of the same drafts. That is the point
-of AAuth: no party pre-registers with any other, and trust bootstraps through
-HTTPS discovery.
+All three are separate projects, built independently against the same drafts.
+None of them pre-registers with any other, and none shares a secret with any
+other — trust bootstraps through HTTPS discovery alone. That is the point of
+AAuth, and it is pleasant to see it hold up in practice.
+
+Our thanks to the **agentd** and **mcpg** teams. Independent implementations are
+what turn a draft into a protocol.
 
 ## Rate limits
 
