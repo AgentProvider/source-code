@@ -10,5 +10,6 @@ edition = "2021"
 [dependencies]
 aauth-core = { path = "../../crates/aauth-core" }
 serde_json = "1"
+sha2 = "0.10"
 ed25519-dalek = { version = "2", features = ["std"] }
 ureq = { version = "2", features = ["tls", "json"] }

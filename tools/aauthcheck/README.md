@@ -16,6 +16,11 @@ cargo run
 # Also grade a Person Server under test
 cargo run -- --target https://ps.example
 
+# Follow the deferred flow: poll the pending URL so the person-token claims
+# are graded once a person (or an operator CLI) approves. A fresh agent has
+# no consent on record, so without this a correct PS stops at 202.
+cargo run -- --target http://localhost:8430 --poll
+
 # Point at a different Agent Provider
 cargo run -- --ap https://ap.example --target https://ps.example
 ```
@@ -49,6 +54,14 @@ never make: it proves a *third-party verifier* accepts what we issue.
   required claims are present, `cnf.jwk` is present, and the lifetime is
   **≤ 1 hour**
 - or, on a deferred `202`, that `AAuth-Requirement` is present
+
+## Conformance notes for the client itself
+
+A body means the signature MUST additionally cover `content-digest` and
+`content-type` on a PS or AS endpoint — the client sends `Content-Digest`
+(RFC 9530, `sha-256=:…:`) and covers both. Omitting them is a *client* bug; a
+correct server answers `401 invalid_input` naming what it required, and this
+tool prints the `Signature-Error` on any 401 so the reason is visible.
 
 ## Notes
 

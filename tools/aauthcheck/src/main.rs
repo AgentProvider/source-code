@@ -20,23 +20,55 @@ fn url_parts(url: &str) -> (String, String) {
     }
 }
 
-/// Sign and send one AAuth request. `body` None => GET.
+/// Sign and send one AAuth request.
+///
+/// A body means a `Content-Digest` and the two extra covered components the
+/// profile requires: "A request carrying a body to a PS or AS endpoint MUST
+/// additionally sign `content-digest` and `content-type`." Omitting them is a
+/// conformance bug in the *client*, and a correct server answers `401
+/// invalid_input` naming what it required.
 fn call(
     method: &str,
     url: &str,
     scheme: &str,
     key: &SigningKey,
     body: Option<&serde_json::Value>,
+    prefer_wait: Option<u64>,
 ) -> (u16, String, Vec<(String, String)>) {
+    use sha2::{Digest, Sha256};
+
     let (authority, path) = url_parts(url);
-    let no_headers = |_: &str| None;
+    let body_bytes = body.map(|b| b.to_string().into_bytes());
+
+    // RFC 9530: sha-256=:<standard base64>:
+    let digest = body_bytes.as_ref().map(|b| {
+        format!(
+            "sha-256=:{}:",
+            aauth_core::b64::encode_std(&Sha256::digest(b))
+        )
+    });
+
+    let extra: Vec<&str> = if digest.is_some() {
+        vec!["content-type", "content-digest"]
+    } else {
+        vec![]
+    };
+    let digest_for_lookup = digest.clone();
+    let lookup = move |name: &str| -> Option<String> {
+        match name {
+            "content-type" => Some("application/json".to_string()),
+            "content-digest" => digest_for_lookup.clone(),
+            _ => None,
+        }
+    };
+
     let signed = sig::sign_request(
         method,
         &authority,
         &path,
         "",
-        &[],
-        &no_headers,
+        &extra,
+        &lookup,
         scheme,
         key,
         now_unix(),
@@ -47,11 +79,17 @@ fn call(
         .set("signature-input", &signed.signature_input)
         .set("signature", &signed.signature)
         .set("signature-key", &signed.signature_key);
-    if body.is_some() {
-        req = req.set("content-type", "application/json");
+    if let Some(d) = &digest {
+        req = req
+            .set("content-type", "application/json")
+            .set("content-digest", d);
     }
-    let resp = match body {
-        Some(b) => req.send_string(&b.to_string()),
+    if let Some(w) = prefer_wait {
+        req = req.set("prefer", &format!("wait={w}"));
+    }
+
+    let resp = match &body_bytes {
+        Some(b) => req.send_bytes(b),
         None => req.call(),
     };
     let (code, r) = match resp {
@@ -66,6 +104,18 @@ fn call(
         .filter_map(|n| r.header(n).map(|v| (n.to_lowercase(), v.to_string())))
         .collect();
     (code, r.into_string().unwrap_or_default(), hdrs)
+}
+
+/// A 401 always carries a machine-readable reason; surface it or debugging is
+/// guesswork.
+fn explain(code: u16, hdrs: &[(String, String)]) -> String {
+    if code != 401 {
+        return String::new();
+    }
+    hdrs.iter()
+        .find(|(n, _)| n == "signature-error")
+        .map(|(_, v)| format!("  [{v}]"))
+        .unwrap_or_default()
 }
 
 fn get_json(url: &str) -> Result<serde_json::Value, String> {
@@ -102,6 +152,7 @@ fn main() {
         .position(|a| a == "--target")
         .and_then(|i| args.get(i + 1))
         .cloned();
+    let poll = args.iter().any(|a| a == "--poll");
 
     let mut pass = 0usize;
     let mut fail = 0usize;
@@ -119,6 +170,7 @@ fn main() {
         &hwk,
         &durable,
         Some(&serde_json::json!({})),
+        None,
     );
     let enrolled: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::json!({}));
     let agent_id = enrolled["agent"].as_str().unwrap_or("").to_string();
@@ -134,6 +186,7 @@ fn main() {
         &hwk,
         &durable,
         Some(&serde_json::json!({})),
+        None,
     );
     let tok: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::json!({}));
     let agent_token = tok["agent_token"].as_str().unwrap_or("").to_string();
@@ -164,7 +217,14 @@ fn main() {
     println!("\n== Interop: whoami.aauth.dev (third-party resource) ==");
     {
         let scheme = sigkey::serialize_jwt(&agent_token);
-        let (code, body, hdrs) = call("GET", "https://whoami.aauth.dev", &scheme, &durable, None);
+        let (code, body, hdrs) = call(
+            "GET",
+            "https://whoami.aauth.dev",
+            &scheme,
+            &durable,
+            None,
+            None,
+        );
         let sigerr = hdrs
             .iter()
             .find(|(n, _)| n == "signature-error")
@@ -258,19 +318,54 @@ fn main() {
 
                 // 2d. Signed request with a real agent token
                 let scheme = sigkey::serialize_jwt(&agent_token);
-                let (code, body, hdrs) = call(
+                let (mut code, mut body, mut hdrs) = call(
                     "POST",
                     &ep,
                     &scheme,
                     &durable,
                     Some(&serde_json::json!({ "resource": "https://whoami.aauth.dev" })),
+                    poll.then_some(20),
                 );
                 let signed_ok = code == 200 || code == 202;
                 t(check(
                     signed_ok,
                     "signed person-token request accepted",
-                    &format!("HTTP {code}"),
+                    &format!("HTTP {code}{}", explain(code, &hdrs)),
                 ));
+
+                // A fresh agent has no consent on record, so a correct PS
+                // defers. Follow the pending URL so the person-token claims are
+                // actually graded once a person (or operator CLI) decides.
+                if code == 202 && poll {
+                    let loc = hdrs
+                        .iter()
+                        .find(|(n, _)| n == "location")
+                        .map(|(_, v)| v.clone());
+                    t(check(loc.is_some(), "202 carries Location", ""));
+                    if let Some(loc) = loc {
+                        let pending = if loc.starts_with("http") {
+                            loc
+                        } else {
+                            format!("{}{}", target.trim_end_matches('/'), loc)
+                        };
+                        println!("       polling {pending} — approve it now (3 x 20s)");
+                        for _ in 0..3 {
+                            let (c, b, h) =
+                                call("GET", &pending, &scheme, &durable, None, Some(20));
+                            code = c;
+                            body = b;
+                            hdrs = h;
+                            if code != 202 {
+                                break;
+                            }
+                        }
+                        t(check(
+                            code == 200 || code == 403,
+                            "pending resolved to a terminal state",
+                            &format!("HTTP {code}"),
+                        ));
+                    }
+                }
 
                 if code == 200 {
                     let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
