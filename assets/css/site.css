@@ -329,6 +329,11 @@ code, kbd, pre { font-family: var(--font-mono); font-size: 0.9em; }
 .footer .wrap { display: grid; grid-template-columns: 1.3fr repeat(4, 1fr); gap: 28px; }
 .footer .col h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted-fg); margin: 0 0 12px; font-weight: 600; }
 .footer .col a { display: block; color: var(--fg-soft); font-size: 14px; padding: 4px 0; transition: color .15s; }
+/* The rule above is (0,2,1) and beats `.brand` at (0,1,0), so the footer
+   wordmark loses its flex layout: the 24px grid mark becomes block-level
+   and stacks above the name instead of sitting beside it. Restore it at
+   higher specificity rather than weakening the link rule. */
+.footer .col a.brand { display: inline-flex; align-items: center; gap: 9px; padding: 0; }
 .footer .col a:hover { color: var(--accent); }
 .footer .about p { color: var(--muted-fg); font-size: 13.5px; margin: 12px 0 0; max-width: 34ch; }
 .footer .legal { border-top: 1px solid var(--border); margin-top: 28px; padding-top: 20px; font-size: 12.5px; color: var(--muted-fg); }
