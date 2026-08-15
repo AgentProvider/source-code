@@ -198,6 +198,24 @@ Off by default. Metrics (scope `apd`): `apd.enroll.total`
 Traces: one SERVER span per request (method, route template, status). See
 [configuration.md](configuration.md#observability).
 
+## Conformance client
+
+[`tools/aauthcheck`](https://github.com/AgentProvider/source-code/tree/main/tools/aauthcheck)
+is a standalone client built on `aauth-core`. It enrols a throwaway agent at a
+live Agent Provider and then exercises a target server the way a real agent
+would — signed RFC 9421 requests, real tokens, no mocks.
+
+```sh
+cd tools/aauthcheck
+cargo run                                     # AP checks + third-party interop
+cargo run -- --target https://ps.example      # also grade a Person Server
+```
+
+It verifies the agent-token `alg` is the fully-specified `Ed25519`, that an
+independent resource accepts our tokens, and — for a Person Server — metadata,
+JWKS algorithms, unsigned rejection, signed acceptance, and every person-token
+claim including the ≤1 h lifetime. Non-zero exit on failure, so it works in CI.
+
 ## CLI
 
 ```

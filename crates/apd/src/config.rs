@@ -86,6 +86,15 @@ pub struct Config {
 
     #[serde(default)]
     pub revocation: RevocationConfig,
+
+    /// The `@authority` value signed requests must carry. Defaults to the
+    /// issuer's host (plus port when it is not the scheme default).
+    ///
+    /// Set this only when a TLS-terminating proxy rewrites the `Host` header
+    /// and cannot be configured to preserve it — agents sign `@authority`, so
+    /// it must match what the agent signed, not what the proxy forwarded.
+    #[serde(default)]
+    pub expected_authority: Option<String>,
 }
 
 /// OpenTelemetry (metrics + traces) exported over OTLP/HTTP. Disabled by
@@ -537,6 +546,33 @@ impl Config {
     /// The domain part used in agent identifiers (issuer host).
     pub fn agent_domain(&self) -> String {
         aauth_core::ident::host_of(&self.issuer).expect("validated issuer")
+    }
+
+    /// The `@authority` a signed request must be addressed to.
+    ///
+    /// `@authority` is a mandated covered component because it "binds the
+    /// signature to the target host, preventing cross-host replay". That only
+    /// holds if the verifier checks the authority is its own: a verifier that
+    /// merely rebuilds the signature base from the received `Host` will accept
+    /// a signature bound to any host, because the base it builds matches.
+    pub fn required_authority(&self) -> String {
+        if let Some(a) = &self.expected_authority {
+            return a.to_ascii_lowercase();
+        }
+        let https = self.issuer.starts_with("https://");
+        let rest = self
+            .issuer
+            .strip_prefix("https://")
+            .or_else(|| self.issuer.strip_prefix("http://"))
+            .unwrap_or(&self.issuer);
+        let hostport = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+        let hostport = hostport.to_ascii_lowercase();
+        // Normalize away the scheme default port, as RFC 9421 §2.2.3 signers do.
+        let default = if https { ":443" } else { ":80" };
+        hostport
+            .strip_suffix(default)
+            .map(|h| h.to_string())
+            .unwrap_or(hostport)
     }
 }
 

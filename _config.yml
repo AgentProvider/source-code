@@ -36,6 +36,7 @@ exclude:
   # Not for the public site.
   - docs/runbooks/
   - deploy/
+  - tools/
   - BACKLOG.md
   - README.md
   - Cargo.toml

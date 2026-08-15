@@ -1,0 +1,14 @@
+[package]
+name = "aauthcheck"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone: deliberately outside the apd workspace so it never affects the
+# apd build or the release pipeline.
+[workspace]
+
+[dependencies]
+aauth-core = { path = "../../crates/aauth-core" }
+serde_json = "1"
+ed25519-dalek = { version = "2", features = ["std"] }
+ureq = { version = "2", features = ["tls", "json"] }

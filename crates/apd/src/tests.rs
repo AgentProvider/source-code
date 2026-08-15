@@ -1521,3 +1521,67 @@ async fn revoke_without_ps_is_still_local() {
     assert_eq!(body["status"], "revoked");
     assert_eq!(body["ps_notification"]["status"], "no_ps");
 }
+
+// ------------------------------------------------- @authority binding
+// `@authority` is a mandated covered component because it "binds the signature
+// to the target host, preventing cross-host replay". The binding only holds if
+// the verifier checks the authority is its own — otherwise it rebuilds the base
+// from the received Host and a signature bound to any host verifies.
+
+#[tokio::test]
+async fn foreign_authority_is_rejected_before_any_verification() {
+    let app = build_app("https://ap.example", "open").await;
+    let durable = generate_signing_key();
+    let durable_jwk = Jwk::from_verifying_key(&durable.verifying_key());
+
+    // A perfectly valid signature — but bound to someone else's host.
+    let ctx = AgentReq::new(Method::POST, "evil.example", "/enroll").into_ctx(
+        &sigkey::serialize_hwk(&durable_jwk),
+        &durable,
+        now_unix(),
+    );
+    let (status, body) = call(&app, Method::POST, "/enroll", ctx).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+    assert_eq!(body["error"], "invalid_request");
+    // Not a signature failure: nothing was verified, so no Signature-Error.
+    assert_eq!(body["type"], "urn:ietf:params:sig-error:invalid_request");
+}
+
+#[tokio::test]
+async fn matching_authority_still_works() {
+    // Guard against the check being too strict and breaking every request.
+    let app = build_app("https://ap.example", "open").await;
+    let durable = generate_signing_key();
+    let agent = enroll_open(&app, &durable).await;
+    assert!(agent.starts_with("aauth:"));
+}
+
+#[test]
+fn required_authority_derivation() {
+    let cfg = |issuer: &str, override_: Option<&str>| {
+        let mut v = serde_json::json!({
+            "issuer": issuer,
+            "storage": { "backend": "memory" },
+            "enrollment": { "methods": ["open"] },
+            "insecure_dev_mode": true,
+        });
+        if let Some(o) = override_ {
+            v["expected_authority"] = o.into();
+        }
+        serde_json::from_value::<Config>(v)
+            .unwrap()
+            .required_authority()
+    };
+    // Scheme default ports are normalized away, as a conforming signer does.
+    assert_eq!(cfg("https://ap.example", None), "ap.example");
+    assert_eq!(cfg("https://ap.example:443", None), "ap.example");
+    // A non-default port is part of @authority and must be kept.
+    assert_eq!(cfg("https://ap.example:8443", None), "ap.example:8443");
+    assert_eq!(cfg("http://127.0.0.1:8420", None), "127.0.0.1:8420");
+    assert_eq!(cfg("http://localhost:80", None), "localhost");
+    // The override wins, for deployments behind a Host-rewriting proxy.
+    assert_eq!(
+        cfg("https://ap.example", Some("Internal.LB:8080")),
+        "internal.lb:8080"
+    );
+}

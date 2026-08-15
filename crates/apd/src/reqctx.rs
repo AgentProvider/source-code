@@ -150,6 +150,32 @@ pub async fn verify_signature(
     app: &Arc<App>,
     extra_required: &[&str],
 ) -> Result<Signer, ApiError> {
+    // Cross-host replay defence, and it must come first.
+    //
+    // `@authority` is mandated precisely because it "binds the signature to the
+    // target host, preventing cross-host replay" (AAuth, Covered Components).
+    // That binding only holds if we check the authority is *ours*: we rebuild
+    // the signature base from the received `Host`, so a signature bound to
+    // another host verifies against a base that also names the other host.
+    // Without this check the mandated component protects nothing.
+    //
+    // Checked before parsing, before verification, and before any JWKS fetch —
+    // a request addressed elsewhere must not make us fetch on its behalf. No
+    // `Signature-Error` header: nothing has been verified yet, so this is a
+    // malformed request rather than a signature failure.
+    let required = app.cfg.required_authority();
+    if ctx.authority != required {
+        return Err(ApiError::bad_request(
+            "invalid_request",
+            format!(
+                "request authority '{}' is not this provider ('{required}'). \
+                 Agents sign @authority, so a proxy must preserve the Host \
+                 header, or set expected_authority.",
+                ctx.authority
+            ),
+        ));
+    }
+
     let lookup = |name: &str| ctx.header(name);
     let parts = ctx.request_parts(&lookup);
     let policy = ctx.verify_policy(app, extra_required.iter().map(|s| s.to_string()).collect());
