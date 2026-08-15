@@ -189,6 +189,28 @@ means the same thing in both.
 If you want the stricter ID-token check, the clean way to get it is a dedicated
 authorization server whose tokens name only this audience.
 
+## If you also run psd
+
+[Person Server](https://personserver.dev) authenticates people against the same
+identity provider, and its SSO documentation is deliberately the same shape as
+this page. Three checks differ, and all three follow from one fact rather than
+from a difference of opinion:
+
+> psd consumes an **ID token it fetched itself** over the back channel, with
+> client authentication and PKCE, in the request that spent the authorization
+> code. apd consumes an **access token it was handed** by whoever is calling
+> the admin API.
+
+| Check | apd | psd | Why |
+|---|---|---|---|
+| `cnf` present | refused | recorded, allowed | Only apd receives a *presented* credential, so only apd can downgrade a sender-constrained token into a bearer one. Nothing presents psd its ID token, so there is nothing to downgrade. |
+| `azp` on multi-audience | not checked | required | psd's audience is always the client ID, so `azp` must equal it. apd's names the API while `azp` names the client, so requiring a match would reject good tokens. See [above](#tokens-with-more-than-one-audience). |
+| Group claim source | the token | the token, with userinfo held in reserve | psd holds an access token from the code exchange, so it can fall back to userinfo if the ID token's group cap is hit. apd has no second call available. |
+
+Everything an operator touches is identical on purpose: field names, the two
+claim-gate messages, and the structure of this page. If you have configured one,
+you already know how to configure the other.
+
 ## Checking a new tenant
 
 apd's test suite pins the document shapes but cannot prove your tenant is
