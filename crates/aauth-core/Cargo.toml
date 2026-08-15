@@ -4,6 +4,11 @@ description = "AAuth protocol primitives: JWK/JWKS, EdDSA JWTs, agent identifier
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage = "https://agentprovider.dev"
+documentation = "https://docs.rs/aauth-core"
+keywords = ["aauth", "jwt", "ed25519", "http-signatures", "agent"]
+categories = ["authentication", "cryptography"]
 rust-version.workspace = true
 
 [dependencies]
