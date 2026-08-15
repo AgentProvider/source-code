@@ -221,10 +221,26 @@ fn authority_header(parsed: &ParsedUrl) -> String {
     }
 }
 
+/// Reserved TLDs (RFC 2606 / RFC 6761) that never resolve legitimately.
+/// Refused before DNS: an attacker-supplied issuer naming one would otherwise
+/// cost a resolver round-trip, and under load those stall.
+const RESERVED_TLDS: [&str; 3] = [".example", ".invalid", ".test"];
+
+fn is_reserved_host(host: &str) -> bool {
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    RESERVED_TLDS.iter().any(|t| h.ends_with(t))
+}
+
 /// Resolve a host and admit exactly one address under the egress policy.
 async fn admit(parsed: &ParsedUrl, policy: &EgressPolicy) -> Result<SocketAddr, String> {
     if !parsed.https && !policy.allow_http {
         return Err("plain http egress not allowed".into());
+    }
+    if is_reserved_host(&parsed.host) {
+        return Err(format!(
+            "host {} is under a reserved TLD (RFC 2606/6761) and cannot resolve",
+            parsed.host
+        ));
     }
     let addrs: Vec<SocketAddr> = tokio::net::lookup_host((parsed.host.as_str(), parsed.port))
         .await
@@ -247,6 +263,12 @@ async fn get_inner(url: &str, policy: &EgressPolicy) -> Result<Bytes, String> {
     let parsed = parse_url(url)?;
     if !parsed.https && !policy.allow_http {
         return Err("plain http egress not allowed".into());
+    }
+    if is_reserved_host(&parsed.host) {
+        return Err(format!(
+            "host {} is under a reserved TLD (RFC 2606/6761) and cannot resolve",
+            parsed.host
+        ));
     }
 
     // Resolve and pin one admitted address.
@@ -374,5 +396,37 @@ mod tests {
         }
         let v6_public: IpAddr = "2606:2800:220:1::1".parse().unwrap();
         assert!(ip_is_public(&v6_public));
+    }
+}
+
+#[cfg(test)]
+mod reserved_tld_tests {
+    use super::*;
+
+    #[test]
+    fn reserved_tlds_are_refused_before_dns() {
+        for h in [
+            "resource.example",
+            "EVIL.EXAMPLE",
+            "thing.invalid",
+            "svc.test",
+            "a.b.example.",
+        ] {
+            assert!(is_reserved_host(h), "{h} should be refused");
+        }
+    }
+
+    #[test]
+    fn real_hosts_are_admitted() {
+        for h in [
+            "ap.example.com",
+            "sandbox.agentprovider.dev",
+            "127.0.0.1",
+            "localhost",
+            "examples.org",
+            "testing.dev",
+        ] {
+            assert!(!is_reserved_host(h), "{h} should be allowed");
+        }
     }
 }
