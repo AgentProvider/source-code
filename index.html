@@ -241,6 +241,37 @@ description: apd issues short-lived, signed identities to your AI agents — no 
   </div>
 </section>
 
+<!-- ============================================================ ecosystem -->
+<section class="section" id="ecosystem">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">The other roles</span>
+      <h2>apd is one of three.</h2>
+      <p>AAuth splits the job. apd says <em>what an agent is</em>; a Person Server says <em>whose it is and what it may do</em>; a resource verifies both. Each is a separate service, run by a different party, and none registers with the others.</p>
+    </div>
+    <div class="doclinks">
+      <a class="doclink" href="https://personserver.dev">
+        <span class="k">the person's side</span>
+        <h3>psd — Person Server</h3>
+        <p>Consent, missions, and identity claims. Issues person tokens and auth tokens so a resource can know <em>who</em> an agent acts for. Self-hostable, same shape as apd.</p>
+        <span class="go">personserver.dev <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="https://agentd.dev">
+        <span class="k">the agent's side</span>
+        <h3>agentd — agent runtime</h3>
+        <p>A minimal runtime that enrolls with an Agent Provider, holds its own Ed25519 key, and signs every MCP request. Point it at apd with one flag.</p>
+        <span class="go">agentd.dev <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="https://mcpg.dev">
+        <span class="k">the resource's side</span>
+        <h3>mcpg — MCP gateway</h3>
+        <p>Verifies the per-request agent signature in front of your MCP server and maps the agent principal into its identity context. No verification code of your own.</p>
+        <span class="go">mcpg.dev <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+    </div>
+  </div>
+</section>
+
 <!-- ============================================================ docs -->
 <section class="section" id="docs">
   <div class="wrap">
