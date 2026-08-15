@@ -225,6 +225,11 @@ fn main() {
         "dwk",
         "",
     ));
+    println!(
+        "       token kid={:?}  iss={}",
+        decoded.header.kid,
+        decoded.payload["iss"].as_str().unwrap_or("?")
+    );
 
     // ---------- 1b. Interop: does an independent resource accept our token? ----------
     println!("\n== Interop: whoami.aauth.dev (third-party resource) ==");

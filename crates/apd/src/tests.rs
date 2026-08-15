@@ -1603,3 +1603,48 @@ fn required_authority_derivation() {
         "internal.lb:8080"
     );
 }
+
+#[tokio::test]
+async fn unreachable_issuer_is_not_reported_as_unknown_key() {
+    // A resource whose JWKS we cannot fetch must not be told its `kid` is
+    // unknown — that sends the operator off regenerating keys when the fault
+    // is at our end. The event token below is well-formed; only the issuer is
+    // unreachable (nothing is listening on that port).
+    let app = build_app("https://ap.example", "open").await;
+    use tokio::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener); // free it: the issuer is now definitively unreachable
+    let dead_issuer = format!("http://127.0.0.1:{port}");
+
+    let resource_key = generate_signing_key();
+    let now = now_unix();
+    let event = sign_jws_eddsa(
+        serde_json::json!({"alg": "Ed25519", "typ": "aa-event+jwt", "kid": "r1"}),
+        serde_json::json!({
+            "iss": dead_issuer, "dwk": "aauth-resource.json",
+            "aud": "aauth:nobody@ap.example", "eid": "e1",
+            "iat": now, "exp": now + 300,
+        }),
+        &resource_key,
+    );
+    let ctx = AgentReq::new(Method::POST, AUTH, "/events").into_ctx(
+        &sigkey::serialize_jwt(&event),
+        &resource_key,
+        now,
+    );
+    let (status, body) = call(&app, Method::POST, "/events", ctx).await;
+
+    assert_ne!(
+        body["error"], "unknown_key",
+        "an unreachable issuer must not be reported as unknown_key: {body}"
+    );
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not a statement about your key"),
+        "detail should say the key was never judged: {body}"
+    );
+    assert!(status.is_client_error(), "status: {status}");
+}

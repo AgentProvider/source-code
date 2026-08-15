@@ -20,6 +20,17 @@ use tokio::sync::Mutex;
 
 use crate::httpc::{self, EgressPolicy};
 
+/// The issuer could not be reached, so nothing is known about the key.
+///
+/// Deliberately not `unknown_key`: that code tells a caller its *own*
+/// credential is wrong and sends it off regenerating keys and re-enrolling,
+/// when the real problem is at our end of the wire. `invalid_request` carries
+/// no `Signature-Error`, and the detail says plainly that the key was never
+/// judged. A caller can retry; an unknown kid it cannot.
+fn unavailable(detail: String) -> SigError {
+    SigError::new(SigErrorCode::InvalidRequest, detail)
+}
+
 const FETCH_FLOOR: Duration = Duration::from_secs(60);
 const MAX_AGE: Duration = Duration::from_secs(24 * 3600);
 
@@ -86,10 +97,15 @@ impl JwksCache {
             let mut attempts = self.last_attempt.lock().await;
             if let Some(last) = attempts.get(cache_key) {
                 if last.elapsed() < FETCH_FLOOR {
-                    return Err(SigError::new(
-                        SigErrorCode::UnknownKey,
-                        format!("kid '{kid}' not found for {iss} (fetch floor active)"),
-                    ));
+                    // The floor exists so an unknown kid cannot make us hammer a
+                    // third party. But it is held by the *attempt*, not by a
+                    // success, so if the last attempt failed we know nothing
+                    // about this kid and must not claim it is unknown.
+                    return Err(unavailable(format!(
+                        "cannot reach {iss} to resolve kid '{kid}' yet; \
+                         a fetch was attempted recently and the retry floor is \
+                         still held. This is not a statement about your key."
+                    )));
                 }
             }
             attempts.insert(cache_key.to_string(), Instant::now());
@@ -116,7 +132,11 @@ impl JwksCache {
         let meta_url = format!("{iss}/.well-known/{dwk}");
         let metadata = httpc::get_json(&meta_url, &self.policy)
             .await
-            .map_err(|e| SigError::new(SigErrorCode::UnknownKey, format!("metadata fetch: {e}")))?;
+            .map_err(|e| {
+                unavailable(format!(
+                    "cannot reach {meta_url}: {e}. This is not a statement about your key."
+                ))
+            })?;
         // Host-poisoning defense: the document must claim the issuer it was
         // fetched from.
         let issuer = metadata.get("issuer").and_then(|v| v.as_str());
@@ -131,7 +151,7 @@ impl JwksCache {
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 SigError::new(
-                    SigErrorCode::UnknownKey,
+                    SigErrorCode::InvalidKey,
                     format!("no jwks_uri in {meta_url}"),
                 )
             })?;
@@ -153,9 +173,11 @@ impl JwksCache {
                 ));
             }
         }
-        let jwks_val = httpc::get_json(jwks_uri, &self.policy)
-            .await
-            .map_err(|e| SigError::new(SigErrorCode::UnknownKey, format!("jwks fetch: {e}")))?;
+        let jwks_val = httpc::get_json(jwks_uri, &self.policy).await.map_err(|e| {
+            unavailable(format!(
+                "cannot reach {jwks_uri}: {e}. This is not a statement about your key."
+            ))
+        })?;
         serde_json::from_value(jwks_val)
             .map_err(|e| SigError::new(SigErrorCode::InvalidKey, format!("invalid JWKS: {e}")))
     }
