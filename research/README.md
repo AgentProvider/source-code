@@ -17,6 +17,7 @@ out as such.
 | [05 — Connecting resources & MCP](05-connecting-resources-mcp.md) | The resource adoption ladder, verifying agent identity, resource metadata, `AAuth-Access`, resource/auth tokens, and the MCP integration points | …putting AAuth in front of an API or MCP server |
 | [06 — AAuth Events](06-events.md) | The AP-as-inbox model, subscribe/event tokens, the normative `/events` validation order, and AP→agent delivery patterns | …implementing async event delivery |
 | [07 — Implementing a Person Server](07-person-server.md) | A complete build spec for the **PS** role: metadata, agent–person binding, directed identifiers, the person- and auth-token endpoints, verification, retention, revocation, missions, and a phased build order | …building a Person Server, or wanting to know what the PS owes you |
+| [08 — RFC: `psd`, a Person Server implementation](08-psd-implementation-rfc.md) | The build plan for a `psd` binary: deployment shapes, technology decisions, data model, config, HTTP surface, CLI, milestones, open questions. **Seed document — moves to the `psd` repo when it exists** | …deciding whether and how to build a Person Server |
 
 ## Source drafts (as read, 2026-08)
 
