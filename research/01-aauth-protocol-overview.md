@@ -1,6 +1,6 @@
 # AAuth Protocol — Engineering Overview
 
-> Research notes distilled from `draft-hardt-oauth-aauth-protocol` (rev -09, 2026-06-17),
+> Research notes distilled from `draft-hardt-oauth-aauth-protocol` (rev -11, 2026-08-14),
 > source: https://github.com/dickhardt/AAuth. These notes are the shared vocabulary for
 > everything else in this repo. Where behavior is normative in the spec, we say MUST/SHOULD
 > with the spec's meaning.
@@ -275,10 +275,23 @@ additionally use the `Signature-Error` response header (see `03-http-signatures.
 
 ### 5.8 Token revocation
 
-Issuers MAY expose `revocation_endpoint`; accepts signed POST `{"jti": "..."}`; `200` if
-revoked/already-invalid, `404` unknown. Only the token's issuer or a trusted PS may revoke.
-For the AP, "revocation" is primarily *refusing to issue the next agent token* — all
-tokens are short-lived so every re-issuance is a policy evaluation point.
+Issuers MAY expose `revocation_endpoint`; it accepts a signed POST identifying the token
+by the pair **`{"iss": "...", "jti": "..."}`** — both REQUIRED. `200` if revoked or
+already invalid, `404` if the pair is unknown. Recipients maintaining revocation state
+MUST key it by `(iss, jti)`: a `jti` is unique only within its issuer, so a `jti` alone
+invites cross-issuer collision. Only the token's issuer or a trusted PS may revoke.
+Verification is offline (JWKS is cached), so nothing in the verify path reports a
+revocation — a party no revocation request reaches is bounded by token lifetime alone.
+
+Two AP behaviours, and they are different things:
+
+- **Refusing to issue the next agent token.** The primary lever: tokens are short-lived,
+  so every re-issuance is a policy evaluation point. Needs no cross-party coordination.
+- **Revoking tokens already out there.** On learning an agent can no longer be trusted,
+  the AP calls the **PS's** `revocation_endpoint` with each outstanding token's
+  `(iss, jti)`. The PS MUST then deny requests presenting that agent token, and SHOULD
+  revoke the auth tokens it issued for that agent. `apd` does this — see
+  [`docs/api.md`](../docs/api.md).
 
 ## 6. Missions & governance (PS territory — context for us)
 

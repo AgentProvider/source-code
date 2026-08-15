@@ -116,7 +116,7 @@ which `apd` never needs to talk to.
   long-poll).
 - **Built to operate** — stateless verification for relying parties, memory /
   file / Redis storage (multi-instance-safe atomic ops), SSRF-hardened
-  egress, RFC-test-vector-backed crypto, zero-warning clippy, 69 tests.
+  egress, RFC-test-vector-backed crypto, zero-warning clippy, 80 tests.
 
 ### Integration guides — "what do I actually build?"
 
@@ -153,6 +153,7 @@ See [`research/`](research/) for a full, detail-level reading of the spec family
 | **HTTP signatures** | full RFC 9421 verify per the AAuth profile; fully-specified `Ed25519` keys/tokens (sig-key §3.3, no polymorphic `EdDSA`); `Signature-Error` + `Accept-Signature-Alg` responses; egress-admitted JWKS discovery |
 | **AAuth Events** | subscribe tokens, resource-facing `/events` delivery endpoint, agent `/inbox` (poll + long-poll) |
 | **Admin API** | mint enrollment tokens, manage allowed keys, list/inspect/revoke/reinstate agents (bearer-gated, constant-time) |
+| **Revocation** | local refusal to re-issue, **plus** an outbound `(iss, jti)` notification to the agent's Person Server `revocation_endpoint` for tokens already issued — signed as the AP with the `jwks_uri` scheme, best effort, outcome audited |
 | **Audit** | structured JSON audit events for every enrollment decision, issuance, and revocation (stderr + optional file) |
 | **Storage** | `memory`, `file` (crash-safe snapshot), `redis` (multi-instance; hand-rolled RESP2, no client dep) |
 

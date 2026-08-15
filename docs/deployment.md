@@ -122,10 +122,21 @@ restart, or a shared mount), then, after the longest token lifetime has elapsed
 (≤ `agent_token_ttl_secs`), prune the retired keys. The `keys_file` is a secret —
 mode `0600` (the tool sets this), backed up, never committed.
 
-Revoking a single agent is `POST /admin/agents/{local}/revoke`: the AP refuses to
-issue that agent new tokens; its current token ages out within its (≤1 h)
-lifetime. This is the AP's revocation lever — short token lifetimes make every
-refusal effective quickly without any cross-party coordination.
+Revoking a single agent is `POST /admin/agents/{local}/revoke`. Two things happen:
+
+1. **Locally** the AP refuses to issue that agent new tokens. This is authoritative
+   and always takes effect; the current token ages out within its (≤1 h) lifetime.
+2. **At the agent's Person Server**, if the enrollment carries a `ps`, the AP calls
+   the PS's `revocation_endpoint` once per outstanding token with `{"iss","jti"}`,
+   so the PS stops honouring tokens already issued rather than waiting for them to
+   expire.
+
+Step 2 is best effort and never fails the operation. The response and the audit log
+carry `ps_notification.status` — `sent`, `disabled`, `no_ps`, `no_endpoint`, or
+`failed` — so a failed notification is visible rather than silent. **Alert on
+`failed`**: it means revocation did not reach the PS and that access is bounded only
+by the token lifetime. Short `agent_token_ttl_secs` is what makes that bound tight.
+Disable the outbound call with `revocation.notify_ps: false`.
 
 ## systemd
 
