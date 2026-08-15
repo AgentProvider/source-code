@@ -8,7 +8,9 @@
 //! The interface is a small KV + list surface whose mutating operations map
 //! onto atomic Redis primitives, so multi-instance correctness holds:
 //! `put_if_absent` → SET NX, `take` → GETDEL, `incr` → INCR, lists →
-//! RPUSH/LRANGE+DEL. See `research/02-agent-provider.md` §6.
+//! RPUSH/LRANGE+DEL. Anything that must happen exactly once — consuming a
+//! single-use token, counting a use against a cap — is expressed as one of
+//! these, never as read-then-write, which would race between instances.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

@@ -1,9 +1,11 @@
 //! JSON Web Keys (Ed25519 / OKP only), JWKS documents, and RFC 7638 thumbprints.
 //!
-//! AAuth mandates the fully-specified `Ed25519` signature algorithm and
-//! recommends it everywhere; this implementation is deliberately Ed25519-only
-//! to keep the dependency and attack surface minimal. See
-//! `research/03-http-signatures.md`.
+//! AAuth mandates the fully-specified `Ed25519` signature algorithm. This
+//! implementation supports nothing else on purpose: one curve means one code
+//! path to audit, no algorithm-negotiation surface, and no large-integer
+//! arithmetic in the dependency tree. Foreign keys that arrive from third-party
+//! identity providers are handled separately, where the extra algorithms are
+//! contained and cannot affect what we issue.
 
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};

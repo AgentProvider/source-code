@@ -1,6 +1,11 @@
 //! AAuth identifiers: server identifiers (HTTPS URLs) and agent identifiers
 //! (`aauth:local@domain`), with the exact validation rules from the protocol
-//! spec (see `research/01-aauth-protocol-overview.md` §5.6).
+//! spec.
+//!
+//! These are compared by exact string equality everywhere in the protocol, so
+//! the rules are normalization rules as much as validation rules: a value that
+//! parses but differs by case, port, or a trailing slash would silently fail to
+//! match the same identity elsewhere.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentError {

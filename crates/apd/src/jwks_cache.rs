@@ -1,5 +1,10 @@
-//! Issuer JWKS discovery and caching per the AAuth rules
-//! (`research/01-aauth-protocol-overview.md` §5.7):
+//! Issuer JWKS discovery and caching.
+//!
+//! Verification must never depend on a live fetch: a token is checked against a
+//! cached key set, so an issuer being briefly unreachable cannot stop us
+//! verifying tokens it already signed. The refresh floor exists for the reverse
+//! reason — an unknown `kid` is the one legitimate trigger for a refetch, and
+//! also the cheapest way for an attacker to make us hammer a third party.
 //!
 //! - `{iss}/.well-known/{dwk}` → metadata (whose `issuer` MUST equal `iss`)
 //!   → `jwks_uri` → JWKS

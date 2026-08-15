@@ -240,7 +240,11 @@ impl EnrollmentConfig {
 }
 
 /// A trusted issuer of federated enrollment assertions.
-/// See docs/federated-enrollment.md for per-environment recipes.
+///
+/// Every field here narrows what an assertion may claim. The defaults are the
+/// strict ones: an issuer with no `required_claims` still cannot mint agents
+/// beyond its own `issuer`/`audience` pair, and `embed_claims` can never write
+/// a claim the provider itself controls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrustedIssuer {
@@ -740,8 +744,7 @@ pub const EXAMPLE_CONFIG: &str = r#"{
 }
 "#;
 
-/// A fuller example enabling federated enrollment (see
-/// docs/federated-enrollment.md for recipes).
+/// A fuller example enabling federated enrollment.
 pub const EXAMPLE_CONFIG_FEDERATED: &str = r#"{
   "issuer": "https://ap.example.com",
   "listen": "127.0.0.1:8420",

@@ -1,8 +1,11 @@
 //! aauthcheck — an AAuth conformance client built on `aauth-core`.
 //!
 //! Enrolls a throwaway agent at a live Agent Provider, then exercises a target
-//! server the way a real agent would. Used to review `psd` (Person Server)
-//! implementations against the draft.
+//! server the way a real agent would.
+//!
+//! The point is that nothing here is mocked: the agent identity is real, the
+//! signatures are real, and a failure means an interoperability problem rather
+//! than a disagreement between two of our own test doubles.
 
 use aauth_core::{jwk, jwt, now_unix, sig, sigkey};
 use ed25519_dalek::SigningKey;

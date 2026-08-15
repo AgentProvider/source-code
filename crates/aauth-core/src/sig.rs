@@ -1,5 +1,10 @@
-//! RFC 9421 HTTP Message Signatures, profiled for AAuth
-//! (see `research/03-http-signatures.md`).
+//! RFC 9421 HTTP Message Signatures, profiled for AAuth.
+//!
+//! Verification is split in two because key resolution is I/O and policy: the
+//! scheme may require fetching a JWKS, and only the caller knows which hosts it
+//! will talk to. This module therefore stays pure — no network, no clock beyond
+//! the `now` it is handed — so it can be unit-tested against published test
+//! vectors and reused by any party.
 //!
 //! - Signing: [`sign_request`] produces `Signature-Input`, `Signature`, and
 //!   `Signature-Key` headers with the mandated covered components.

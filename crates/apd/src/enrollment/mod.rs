@@ -1,6 +1,9 @@
-//! Enrollment methods and orchestration. See
-//! `docs/federated-enrollment-design.md` for the model and
-//! `docs/federated-enrollment.md` for operator recipes.
+//! Enrollment methods and orchestration.
+//!
+//! Methods are evaluated in a fixed order and never fall through: a presented
+//! credential that fails is a hard denial, not an invitation to try the next
+//! method. Otherwise enabling a weak method alongside a strong one would
+//! silently downgrade the strong one.
 //!
 //! Methods (composable via `enrollment.methods`):
 //! - `token`     — single-use admin-minted enrollment tokens, plus reusable

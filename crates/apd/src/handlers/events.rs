@@ -5,7 +5,9 @@
 //! - `POST /events` (resource, event tok)→ resource delivers an event token
 //! - `GET /inbox`   (agent token)        → drain pending events (long-poll)
 //!
-//! See `research/06-events.md` for the normative validation order.
+//! Delivery validation runs cheapest-first and records durably before
+//! acknowledging: a `202` is a promise the event will be delivered, so it must
+//! not be sent until the event survives a crash.
 
 use std::sync::Arc;
 use std::time::Duration;

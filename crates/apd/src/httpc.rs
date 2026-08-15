@@ -1,6 +1,10 @@
-//! Minimal outbound HTTPS GET client with the egress admission rules the
-//! Signature-Key draft requires of JWKS/metadata fetchers
-//! (see `research/03-http-signatures.md` §9):
+//! Minimal outbound HTTP client with the egress admission rules the
+//! Signature-Key specification requires of JWKS and metadata fetchers.
+//!
+//! Every URL this client is given arrives inside something an attacker can
+//! choose — a token's `iss`, a resource's metadata, an issuer's `jwks_uri` — so
+//! it is a server-side request forgery primitive unless it is constrained.
+//! Hence:
 //!
 //! - HTTPS only (plain HTTP allowed only in insecure_dev_mode)
 //! - redirects are never followed

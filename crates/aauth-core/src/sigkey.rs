@@ -155,9 +155,15 @@ pub struct JktJwtVerified {
     pub exp: i64,
 }
 
-/// Verify a `jkt-jwt` naming JWT per the spec procedure
-/// (see `research/03-http-signatures.md` §4). Only `jkt-s256+jwt` is
-/// supported. `max_lifetime_secs` bounds `exp - iat` (0 = unbounded).
+/// Verify a `jkt-jwt` naming JWT: a self-issued token in which a durable key
+/// delegates to a short-lived one.
+///
+/// The order below matters. The issuer is recomputed from the embedded key and
+/// compared, rather than trusted as sent — otherwise anyone could claim any
+/// durable key by naming its thumbprint. Only `jkt-s256+jwt` is accepted,
+/// because the `typ` is what selects the hash; accepting an unknown `typ` would
+/// mean guessing. `max_lifetime_secs` bounds `exp - iat` (0 = unbounded); the
+/// caller keeps the replay guard, since only it has storage.
 pub fn verify_jkt_jwt(
     token: &str,
     now: u64,
@@ -165,19 +171,23 @@ pub fn verify_jkt_jwt(
 ) -> Result<JktJwtVerified, SigError> {
     let decoded = jwt::decode(token)
         .map_err(|_| SigError::new(SigErrorCode::InvalidJwt, "malformed naming JWT"))?;
-    // 1-2. typ determines the thumbprint hash algorithm
+    // The `typ` selects which hash the thumbprint uses, so an unrecognised one
+    // cannot be tolerated: there would be no defined way to recompute `iss`.
     if decoded.header.typ.as_deref() != Some("jkt-s256+jwt") {
         return Err(SigError::new(
             SigErrorCode::InvalidJwt,
             "unsupported naming JWT typ (expected jkt-s256+jwt)",
         ));
     }
-    // 3-4. extract header jwk
+    // The delegating key travels in the header, not the payload — the payload is
+    // what it is delegating *to*.
     let durable_jwk =
         decoded.header.jwk.clone().ok_or_else(|| {
             SigError::new(SigErrorCode::InvalidJwt, "naming JWT missing header jwk")
         })?;
-    // 5-7. compute thumbprint, compare against iss by string equality
+    // Recompute the issuer from the key we were given and compare, rather than
+    // trusting the `iss` as sent. Skipping this would let anyone assert any
+    // durable identity simply by naming its thumbprint.
     let thumb = durable_jwk.thumbprint().map_err(|_| {
         SigError::new(
             SigErrorCode::UnsupportedAlgorithm,
@@ -195,14 +205,15 @@ pub fn verify_jkt_jwt(
             "naming JWT iss does not match header jwk thumbprint",
         ));
     }
-    // 8. verify JWT signature with the header jwk
+    // Self-issued: the embedded key must have signed the token that carries it.
     jwt::verify_with_jwk(&decoded, &durable_jwk).map_err(|e| match e {
         jwt::JwtError::UnsupportedAlgorithm => {
             SigError::new(SigErrorCode::UnsupportedAlgorithm, "naming JWT algorithm")
         }
         _ => SigError::new(SigErrorCode::InvalidJwt, "naming JWT signature invalid"),
     })?;
-    // 9. iat / exp
+    // Bound the window. A future `iat` is tolerated only within clock skew, and
+    // a caller-supplied ceiling keeps a delegation from outliving its purpose.
     let iat = decoded
         .payload
         .int_claim("iat")
@@ -230,7 +241,8 @@ pub fn verify_jkt_jwt(
             "naming JWT lifetime too long",
         ));
     }
-    // 10. ephemeral key from cnf.jwk
+    // The delegated key. The HTTP signature is made by this one, not by the
+    // durable key, which is why the durable key never touches a live request.
     let ephemeral_jwk: Jwk = decoded
         .payload
         .get("cnf")

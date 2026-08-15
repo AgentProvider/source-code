@@ -1,6 +1,11 @@
 //! Agent-facing ceremony endpoints: enrollment, agent-token issuance/refresh,
-//! and sub-agent token issuance. See `research/02-agent-provider.md` §5 and
-//! `research/04-connecting-agents.md`.
+//! and sub-agent token issuance.
+//!
+//! Enrollment is keyed by the durable key's thumbprint rather than by anything
+//! the caller states about itself, so re-enrolling the same key is idempotent
+//! and a caller cannot claim an identity it does not hold the key for. Refresh
+//! is the policy re-evaluation point: token lifetimes are short specifically so
+//! that refusing to re-issue is an effective revocation lever.
 
 use std::sync::Arc;
 use std::time::Duration;
