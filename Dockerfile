@@ -15,12 +15,19 @@ WORKDIR /src
 # BuildKit caches the cargo registry and a per-arch target dir across builds.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-# `sharing=locked` on the registry: the amd64 and arm64 builds run
-# concurrently and share this cache, and two cargo processes unpacking the
-# same crate into it race — one wins and the other dies with
-# "failed to open .cargo-ok: File exists". The target dir is per-arch
-# instead, since object files are not interchangeable between them.
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+# Every cache mount is keyed per architecture. The amd64 and arm64 stages
+# build concurrently, and a shared registry mount lets two cargo processes
+# unpack the same crate into the same directory — the loser dies with
+# "failed to open .../.cargo-ok: File exists (os error 17)".
+#
+# `sharing=locked` also fixes the race but is the wrong trade here: it holds
+# the lock for the whole RUN, so arm64 cannot start compiling until amd64 has
+# finished, turning max(amd64, arm64) into their sum. arm64 under QEMU is
+# already the long pole. Per-arch mounts cost one duplicated registry
+# download, which BuildKit keeps warm across runs, and keep the two stages
+# genuinely parallel.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=apd-cargo-registry-${TARGETARCH} \
+    --mount=type=cache,target=/usr/local/cargo/git,id=apd-cargo-git-${TARGETARCH} \
     --mount=type=cache,target=/src/target,id=apd-target-${TARGETARCH} \
     cargo build --release --locked --bin apd \
     && strip target/release/apd \
