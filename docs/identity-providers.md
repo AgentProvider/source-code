@@ -170,6 +170,25 @@ splitting on dots, so this resolves.
 
 ---
 
+## Tokens with more than one audience
+
+`aud` may be a single string or an array; apd accepts the token when your
+configured `audience` is among them. A token naming several audiences was
+deliberately minted for all of them, and being named is what authorizes it to
+be presented here.
+
+apd does **not** additionally require `azp`. OpenID Connect asks a *client* to
+check `azp` on a multi-audience **ID token**, where `azp` names the client the
+token was issued to — and for an ID token your `audience` is that client ID, so
+the check would be meaningful. On an **access token**, which is the recommended
+arrangement, `azp` names the client while `audience` names the API, so requiring
+them to match would reject perfectly good tokens. Rather than apply a rule that
+is right in one configuration and wrong in the other, apd relies on `aud`, which
+means the same thing in both.
+
+If you want the stricter ID-token check, the clean way to get it is a dedicated
+authorization server whose tokens name only this audience.
+
 ## Checking a new tenant
 
 apd's test suite pins the document shapes but cannot prove your tenant is

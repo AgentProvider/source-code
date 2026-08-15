@@ -1840,6 +1840,17 @@ async fn admin_sso_rejects_a_token_from_another_issuer() {
 /// The key is Ed25519 for test convenience; Okta signs RS256, whose
 /// verification is pinned separately against the RFC 7515 A.2 test vector.
 async fn spawn_mock_okta(kid: &str, key: &SigningKey) -> (String, tokio::task::JoinHandle<()>) {
+    let mut jwk = Jwk::from_verifying_key(&key.verifying_key());
+    jwk.kid = Some(kid.to_string());
+    jwk.alg = Some("EdDSA".into());
+    spawn_mock_okta_serving(serde_json::json!({ "keys": [jwk] })).await
+}
+
+/// The same mock, presenting a JWKS of your choosing — so a test can hand it an
+/// RSA key, which is what Okta actually signs with.
+async fn spawn_mock_okta_serving(
+    jwks_doc: serde_json::Value,
+) -> (String, tokio::task::JoinHandle<()>) {
     use hyper::server::conn::http1;
     use hyper::service::service_fn;
     use hyper_util::rt::TokioIo;
@@ -1849,10 +1860,7 @@ async fn spawn_mock_okta(kid: &str, key: &SigningKey) -> (String, tokio::task::J
     let port = listener.local_addr().unwrap().port();
     let issuer = format!("http://127.0.0.1:{port}/oauth2/default");
 
-    let mut jwk = Jwk::from_verifying_key(&key.verifying_key());
-    jwk.kid = Some(kid.to_string());
-    jwk.alg = Some("EdDSA".into());
-    let jwks = serde_json::json!({ "keys": [jwk] }).to_string();
+    let jwks = jwks_doc.to_string();
     let discovery = serde_json::json!({
         "issuer": issuer,
         "jwks_uri": format!("{issuer}/v1/keys"),
@@ -2039,6 +2047,89 @@ async fn admin_sso_refuses_a_sender_constrained_token() {
         body.to_string().contains("sender-constrained"),
         "body: {body}"
     );
+}
+
+/// A 2048-bit RSA private key, generated once for tests and valid for nothing.
+/// Okta signs with RS256 and nothing else, so an Ed25519 fixture never
+/// exercises the path a real token takes.
+const RS256_TEST_KEY: &[u8] = include_bytes!("testdata/rs256-test-key.pkcs1.der");
+/// The matching public modulus, base64url — what the JWKS publishes as `n`.
+const RS256_TEST_MODULUS: &str = "pwwXCDE2gKtf95oXO7DdzFweBRIUoxk6XclzyTznEmECMdSLhR1SDS9TbfOoeKo\
+    G1gMawvUI12HkqwhLDlK_HwmWm7P8X_W-cFIW1ksC1dvFx-R2ZK5GefXqv3wJoUeW52rIgfMU-1OT4Dac4rdttJipiDYk\
+    wgNOkoakSYIQvUNH5ls_LfdCq1fGiHH8sxZBFKlTGbxkQP_LDqFyHVMlI9RD1631AWq_2frJFnImWv7ZBHI2BzmiSWlWb\
+    vBb_2w03KsMFv8FMGmA3aegDWZ23Gila9O1J3NLo34sRUpSXhs1_5KOstEiScww_yQ2eAO9r2GlayUhxwXKQWEwrLCodQ";
+
+fn sign_jws_rs256(header: serde_json::Value, payload: serde_json::Value) -> String {
+    let key = ring::signature::RsaKeyPair::from_der(RS256_TEST_KEY).unwrap();
+    let input = format!(
+        "{}.{}",
+        b64::encode(header.to_string().as_bytes()),
+        b64::encode(payload.to_string().as_bytes())
+    );
+    let mut sig = vec![0u8; key.public().modulus_len()];
+    key.sign(
+        &ring::signature::RSA_PKCS1_SHA256,
+        &ring::rand::SystemRandom::new(),
+        input.as_bytes(),
+        &mut sig,
+    )
+    .unwrap();
+    format!("{input}.{}", b64::encode(&sig))
+}
+
+#[tokio::test]
+async fn admin_sso_verifies_the_rs256_okta_actually_signs_with() {
+    // RS256 verification itself is pinned against the RFC 7515 A.2 vector, but
+    // that exercises one function with a hardcoded key. It says nothing about
+    // whether an RSA key survives the route a real token takes: published in a
+    // JWKS, parsed out of it, selected by kid and alg, then used. Every step of
+    // that is shared with Ed25519 and none of it is RSA-shaped, which is
+    // exactly the kind of gap a same-algorithm fixture cannot see.
+    let jwks = serde_json::json!({
+        "keys": [{
+            "kty": "RSA", "alg": "RS256", "use": "sig",
+            "kid": "okta-rsa-1", "n": RS256_TEST_MODULUS, "e": "AQAB",
+        }]
+    });
+    let (issuer, _h) = spawn_mock_okta_serving(jwks).await;
+    let app = admin_sso_app_with(
+        &issuer,
+        "api://apd-admin",
+        serde_json::json!({"groups": "apd-admins"}),
+    )
+    .await;
+
+    let now = now_unix();
+    let token = sign_jws_rs256(
+        serde_json::json!({"alg": "RS256", "kid": "okta-rsa-1", "typ": "JWT"}),
+        serde_json::json!({
+            "iss": issuer, "aud": "api://apd-admin", "sub": "00u1a2b3c4d5e6f7g8h9",
+            "email": "alice@acme.example", "groups": ["Everyone", "apd-admins"],
+            "iat": now, "exp": now + 3600,
+        }),
+    );
+    let (status, body) = call(
+        &app,
+        Method::GET,
+        "/admin/agents",
+        admin_ctx("/admin/agents", &token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    // And a token whose signature does not verify under that key is refused —
+    // otherwise the test above would pass even if verification never ran.
+    let mut tampered = token.clone();
+    let last = tampered.pop().unwrap();
+    tampered.push(if last == 'A' { 'B' } else { 'A' });
+    let (status, _) = call(
+        &app,
+        Method::GET,
+        "/admin/agents",
+        admin_ctx("/admin/agents", &tampered),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[test]
