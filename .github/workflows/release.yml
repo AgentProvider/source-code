@@ -56,7 +56,10 @@ jobs:
           tags: |
             type=raw,value=${{ needs.version.outputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.version }}
-            type=raw,value=latest
+            # Only a final release moves `latest`. The tag filter v*.*.* also
+            # matches a prerelease like v1.0.0-rc1, and pointing `latest` at a
+            # release candidate would upgrade every `:latest` user to it.
+            type=raw,value=latest,enable=${{ !contains(needs.version.outputs.version, '-') }}
             type=sha,prefix=sha-
       - uses: docker/build-push-action@v6
         with:
