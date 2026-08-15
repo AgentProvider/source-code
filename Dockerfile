@@ -15,7 +15,12 @@ WORKDIR /src
 # BuildKit caches the cargo registry and a per-arch target dir across builds.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+# `sharing=locked` on the registry: the amd64 and arm64 builds run
+# concurrently and share this cache, and two cargo processes unpacking the
+# same crate into it race — one wins and the other dies with
+# "failed to open .cargo-ok: File exists". The target dir is per-arch
+# instead, since object files are not interchangeable between them.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,id=apd-target-${TARGETARCH} \
     cargo build --release --locked --bin apd \
     && strip target/release/apd \
