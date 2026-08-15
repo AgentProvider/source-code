@@ -88,6 +88,30 @@ Override per federated issuer with `"assurance": "<tier>"` (lowercase
 `[a-z0-9_]`, ≤32 chars). Sub-agents inherit their parent's tier. The claim is
 protected — a trusted issuer's `embed_claims` cannot forge it.
 
+## Revocation
+
+| Field | Default | Meaning |
+|---|---|---|
+| `revocation.notify_ps` | `true` | On `POST /admin/agents/{local}/revoke`, also call the agent's Person Server `revocation_endpoint`. |
+| `revocation.max_tracked_tokens` | `64` | Safety cap on outstanding token identifiers tracked per agent. |
+
+Revocation in AAuth names a **token**, not an agent: recipients key revocation
+state by `(iss, jti)`. apd therefore records each issued `jti` with a TTL equal
+to the token's remaining life — the index self-prunes, and there is no reaper.
+On revoke it sends one signed `POST {revocation_endpoint}` per outstanding
+token, signing as the AP itself with the `jwks_uri` scheme so the PS can confirm
+the caller is the token's `iss`.
+
+**Local revocation is authoritative.** Refusing to re-issue always takes effect,
+whatever the PS does. The notification is best effort and its outcome
+(`sent` / `disabled` / `no_ps` / `no_endpoint` / `failed`) appears in the admin
+response and the audit log. Where no revocation reaches a holder, access is
+bounded by the token lifetime — which is the argument for keeping
+`agent_token_ttl_secs` short.
+
+Set `notify_ps: false` to keep revocation purely local; apd then skips the `jti`
+index entirely.
+
 ## Observability
 
 Set `telemetry.enabled` (or `APD_TELEMETRY_ENABLED=1`) to export **metrics and

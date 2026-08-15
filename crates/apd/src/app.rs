@@ -17,6 +17,9 @@ pub struct App {
     pub keys: KeySet,
     pub store: Store,
     pub jwks_cache: JwksCache,
+    /// Outbound admission policy, shared by JWKS discovery and revocation
+    /// notifications so both obey the same SSRF rules.
+    pub egress: crate::httpc::EgressPolicy,
     /// Trusted federated-enrollment issuers (static material pre-loaded).
     pub issuers: Vec<IssuerRuntime>,
     pub audit: Audit,
@@ -50,6 +53,7 @@ impl App {
             keys,
             store,
             jwks_cache,
+            egress,
             issuers,
             audit,
             agent_metadata_bytes,

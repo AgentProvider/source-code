@@ -8,6 +8,15 @@ use aauth_core::now_unix;
 
 use crate::app::App;
 
+/// A minted token plus the two facts a caller needs afterwards: when it dies,
+/// and the `jti` that names it. Revocation identifies a token by `(iss, jti)`,
+/// so the issuance path must surface the `jti` rather than bury it.
+pub struct Issued {
+    pub token: String,
+    pub exp: u64,
+    pub jti: String,
+}
+
 /// Claims that may never be overridden by issuer `embed_claims`
 /// (defense-in-depth; also validated at config load).
 const PROTECTED: [&str; 12] = [
@@ -37,17 +46,18 @@ pub fn agent_token(
     ttl_secs: u64,
     embed_claims: Option<&serde_json::Map<String, serde_json::Value>>,
     assurance: Option<&str>,
-) -> (String, u64) {
+) -> Issued {
     let now = now_unix();
     let exp = now + ttl_secs;
     let agent_id = AgentId::new(local, &app.cfg.agent_domain())
         .expect("validated local part")
         .to_string();
+    let jti = aauth_core::rand_token(128);
     let mut payload = serde_json::json!({
         "iss": app.cfg.issuer,
         "dwk": "aauth-agent.json",
         "sub": agent_id,
-        "jti": aauth_core::rand_token(128),
+        "jti": jti.clone(),
         "cnf": { "jwk": signing_jwk.public_only() },
         "iat": now,
         "exp": exp,
@@ -72,7 +82,7 @@ pub fn agent_token(
         &payload,
         &app.keys.active_key,
     );
-    (token, exp)
+    Issued { token, exp, jti }
 }
 
 /// Mint a sub-agent token. `parent` must be a top-level agent id; the returned
@@ -87,7 +97,7 @@ pub fn subagent_token(
     parent_exp: u64,
     embed_claims: Option<&serde_json::Map<String, serde_json::Value>>,
     assurance: Option<&str>,
-) -> Result<(String, u64), String> {
+) -> Result<Issued, String> {
     let sub_id = parent
         .subagent(discriminator)
         .map_err(|_| "invalid discriminator".to_string())?;
@@ -97,12 +107,13 @@ pub fn subagent_token(
     if exp <= now {
         return Err("parent token too close to expiry to mint a sub-agent token".into());
     }
+    let jti = aauth_core::rand_token(128);
     let mut payload = serde_json::json!({
         "iss": app.cfg.issuer,
         "dwk": "aauth-agent.json",
         "sub": sub_id.to_string(),
         "parent_agent": parent.to_string(),
-        "jti": aauth_core::rand_token(128),
+        "jti": jti.clone(),
         "cnf": { "jwk": signing_jwk.public_only() },
         "iat": now,
         "exp": exp,
@@ -129,7 +140,7 @@ pub fn subagent_token(
         &payload,
         &app.keys.active_key,
     );
-    Ok((token, exp))
+    Ok(Issued { token, exp, jti })
 }
 
 /// Mint a subscribe token (AAuth Events).

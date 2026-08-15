@@ -199,16 +199,38 @@ pub async fn get_agent(ctx: &ReqCtx, app: &Arc<App>, local: &str) -> Result<Resp
     Ok(json_ok(&serde_json::to_value(rec).unwrap()))
 }
 
-/// `POST /admin/agents/{local}/revoke` → refuse future token issuance.
+/// `POST /admin/agents/{local}/revoke` → refuse future token issuance, and
+/// tell the agent's Person Server about the tokens already out there.
+///
+/// Local revocation is authoritative and happens first. The PS notification is
+/// best effort (protocol spec, Token Revocation): its outcome is reported and
+/// audited, but a PS we cannot reach never fails the operation — that access is
+/// then bounded by the token lifetime, exactly as the spec describes.
 pub async fn revoke_agent(ctx: &ReqCtx, app: &Arc<App>, local: &str) -> Result<Resp, ApiError> {
     authorize(ctx, app)?;
-    set_status(app, local, STATUS_REVOKED).await
+    let ps = persist_status(app, local, STATUS_REVOKED).await?;
+
+    let outcome = crate::revocation::notify_ps(app, local, ps.as_deref()).await;
+    app.audit.emit(
+        "agent_revoked",
+        serde_json::json!({ "local": local, "ps_notification": outcome }),
+    );
+    Ok(json_ok(&serde_json::json!({
+        "local": local,
+        "status": STATUS_REVOKED,
+        "ps_notification": outcome,
+    })))
 }
 
 /// `POST /admin/agents/{local}/reinstate`
 pub async fn reinstate_agent(ctx: &ReqCtx, app: &Arc<App>, local: &str) -> Result<Resp, ApiError> {
     authorize(ctx, app)?;
-    set_status(app, local, STATUS_ACTIVE).await
+    persist_status(app, local, STATUS_ACTIVE).await?;
+    app.audit
+        .emit("agent_reinstated", serde_json::json!({ "local": local }));
+    Ok(json_ok(
+        &serde_json::json!({ "local": local, "status": STATUS_ACTIVE }),
+    ))
 }
 
 async fn load_agent(app: &App, local: &str) -> Result<AgentRecord, ApiError> {
@@ -220,21 +242,19 @@ async fn load_agent(app: &App, local: &str) -> Result<AgentRecord, ApiError> {
     serde_json::from_slice(&raw).map_err(|e| ApiError::server_error(format!("corrupt record: {e}")))
 }
 
-async fn set_status(app: &Arc<App>, local: &str, status: &str) -> Result<Resp, ApiError> {
+/// Set the enrollment's status and persist it. Returns the record's `ps`, which
+/// the revoke path needs to reach the right Person Server. Callers emit their
+/// own audit event, because revoke carries the notification outcome with it.
+async fn persist_status(
+    app: &Arc<App>,
+    local: &str,
+    status: &str,
+) -> Result<Option<String>, ApiError> {
     let mut rec = load_agent(app, local).await?;
     rec.status = status.to_string();
+    let ps = rec.ps.clone();
     app.store
         .put(&agent_key(local), &serde_json::to_vec(&rec).unwrap(), None)
         .await?;
-    app.audit.emit(
-        if status == STATUS_REVOKED {
-            "agent_revoked"
-        } else {
-            "agent_reinstated"
-        },
-        serde_json::json!({ "local": local }),
-    );
-    Ok(json_ok(
-        &serde_json::json!({ "local": local, "status": status }),
-    ))
+    Ok(ps)
 }

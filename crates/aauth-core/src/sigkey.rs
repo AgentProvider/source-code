@@ -128,6 +128,19 @@ pub fn serialize_jkt_jwt(token: &str) -> String {
     format!("jkt-jwt;jwt={}", sfv::serialize_string(token))
 }
 
+/// Serialize a `jwks_uri` member value — an identified signer whose key the
+/// verifier discovers at `{id}/.well-known/{dwk}` → `jwks_uri` → `kid`. This is
+/// how a server signs as *itself* (rather than presenting a token), e.g. an
+/// Agent Provider calling a Person Server's `revocation_endpoint`.
+pub fn serialize_jwks_uri(id: &str, dwk: &str, kid: &str) -> String {
+    format!(
+        "jwks_uri;id={};dwk={};kid={}",
+        sfv::serialize_string(id),
+        sfv::serialize_string(dwk),
+        sfv::serialize_string(kid)
+    )
+}
+
 /// Result of verifying a `jkt-jwt` naming JWT.
 #[derive(Debug, Clone)]
 pub struct JktJwtVerified {

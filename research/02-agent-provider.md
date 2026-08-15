@@ -101,6 +101,11 @@ From the protocol spec:
       `unsupported_scheme`, `invalid_key`, `unknown_key`, `invalid_jwt`, `expired_jwt`,
       `invalid_request`).
 - [ ] Errors: RFC 9457 `application/problem+json` with `error` member.
+- [x] Revocation: on revoking an agent, call the PS's `revocation_endpoint` with
+      `{iss, jti}` per outstanding token (recipients key revocation state by that
+      pair). Sign as the AP with the `jwks_uri` scheme so the PS can confirm the
+      caller is the token's `iss`. Best effort — local refusal to re-issue is the
+      authoritative lever, and unreachable holders are bounded by token lifetime.
 - [ ] Events (if enabled): everything in `06-events.md` §AP validation — including
       "MUST NOT return 202 before the event is durably recorded".
 

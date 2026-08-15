@@ -126,6 +126,123 @@ pub async fn get(url: &str, policy: &EgressPolicy) -> Result<Bytes, String> {
         .map_err(|_| format!("timeout fetching {url}"))?
 }
 
+/// POST a JSON body with caller-supplied headers (the AAuth signature headers),
+/// under the same egress admission as [`get`]. Returns the response status so
+/// the caller can distinguish "revoked" from "unknown token" without treating a
+/// `404` as a transport failure.
+pub async fn post_json(
+    url: &str,
+    body: &[u8],
+    headers: &[(String, String)],
+    policy: &EgressPolicy,
+) -> Result<u16, String> {
+    tokio::time::timeout(policy.timeout, post_inner(url, body, headers, policy))
+        .await
+        .map_err(|_| format!("timeout posting to {url}"))?
+}
+
+async fn post_inner(
+    url: &str,
+    body: &[u8],
+    headers: &[(String, String)],
+    policy: &EgressPolicy,
+) -> Result<u16, String> {
+    let parsed = parse_url(url)?;
+    let addr = admit(&parsed, policy).await?;
+    let stream = TcpStream::connect(addr)
+        .await
+        .map_err(|e| format!("connect {addr}: {e}"))?;
+    stream.set_nodelay(true).ok();
+    let response = if parsed.https {
+        let server_name = rustls::pki_types::ServerName::try_from(parsed.host.clone())
+            .map_err(|_| "invalid TLS server name".to_string())?;
+        let tls = TlsConnector::from(tls_config())
+            .connect(server_name, stream)
+            .await
+            .map_err(|e| format!("tls handshake with {}: {e}", parsed.host))?;
+        send_post(TokioIo::new(tls), &parsed, body, headers).await?
+    } else {
+        send_post(TokioIo::new(stream), &parsed, body, headers).await?
+    };
+    Ok(response.status().as_u16())
+}
+
+async fn send_post<I>(
+    io: I,
+    parsed: &ParsedUrl,
+    body: &[u8],
+    headers: &[(String, String)],
+) -> Result<hyper::Response<hyper::body::Incoming>, String>
+where
+    I: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
+{
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+        .await
+        .map_err(|e| format!("http handshake: {e}"))?;
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let mut req = hyper::Request::builder()
+        .method("POST")
+        .uri(&parsed.path_and_query)
+        .header("host", authority_header(parsed))
+        .header("content-type", "application/json")
+        .header("accept", "application/json")
+        .header("user-agent", concat!("apd/", env!("CARGO_PKG_VERSION")));
+    for (name, value) in headers {
+        req = req.header(name.as_str(), value.as_str());
+    }
+    let req = req
+        .body(http_body_util::Full::new(Bytes::copy_from_slice(body)))
+        .map_err(|e| e.to_string())?;
+    sender.send_request(req).await.map_err(|e| e.to_string())
+}
+
+/// Split a URL into the `@authority` and `@path` values an RFC 9421 signature
+/// must cover, so a caller can sign a request this module will then send.
+pub fn signing_parts(url: &str) -> Result<(String, String), String> {
+    let parsed = parse_url(url)?;
+    let path = parsed
+        .path_and_query
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .to_string();
+    Ok((authority_header(&parsed), path))
+}
+
+/// The `Host` header value (and the `@authority` signature component): host,
+/// plus the port only when it is not the scheme default.
+fn authority_header(parsed: &ParsedUrl) -> String {
+    if (parsed.https && parsed.port != 443) || (!parsed.https && parsed.port != 80) {
+        format!("{}:{}", parsed.host, parsed.port)
+    } else {
+        parsed.host.clone()
+    }
+}
+
+/// Resolve a host and admit exactly one address under the egress policy.
+async fn admit(parsed: &ParsedUrl, policy: &EgressPolicy) -> Result<SocketAddr, String> {
+    if !parsed.https && !policy.allow_http {
+        return Err("plain http egress not allowed".into());
+    }
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((parsed.host.as_str(), parsed.port))
+        .await
+        .map_err(|e| format!("dns error for {}: {e}", parsed.host))?
+        .collect();
+    let addr = addrs
+        .iter()
+        .find(|a| policy.allow_private || ip_is_public(&a.ip()))
+        .ok_or_else(|| format!("no admissible address for {}", parsed.host))?;
+    if !policy.allow_private && addrs.iter().any(|a| !ip_is_public(&a.ip())) {
+        return Err(format!(
+            "host {} resolves to private addresses",
+            parsed.host
+        ));
+    }
+    Ok(*addr)
+}
+
 async fn get_inner(url: &str, policy: &EgressPolicy) -> Result<Bytes, String> {
     let parsed = parse_url(url)?;
     if !parsed.https && !policy.allow_http {

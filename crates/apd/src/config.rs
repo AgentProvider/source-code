@@ -83,11 +83,43 @@ pub struct Config {
 
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+
+    #[serde(default)]
+    pub revocation: RevocationConfig,
 }
 
 /// OpenTelemetry (metrics + traces) exported over OTLP/HTTP. Disabled by
 /// default. When enabled, signals are POSTed to `{endpoint}/v1/traces` and
 /// `{endpoint}/v1/metrics` (OTLP/HTTP + protobuf), the standard Collector shape.
+/// Whether, and how, the AP tells a Person Server that an agent's tokens are
+/// revoked (protocol spec, Token Revocation). Local revocation always happens;
+/// this only controls the outbound notification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevocationConfig {
+    /// Call the agent's PS `revocation_endpoint` on revoke. Requires the
+    /// enrollment to carry a `ps`. Default: true.
+    #[serde(default = "default_true")]
+    pub notify_ps: bool,
+    /// Cap on outstanding token identifiers tracked per agent. Entries expire
+    /// with their token, so this only bounds a pathological refresh loop.
+    #[serde(default = "default_max_tracked")]
+    pub max_tracked_tokens: usize,
+}
+
+impl Default for RevocationConfig {
+    fn default() -> Self {
+        RevocationConfig {
+            notify_ps: true,
+            max_tracked_tokens: default_max_tracked(),
+        }
+    }
+}
+
+fn default_max_tracked() -> usize {
+    64
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TelemetryConfig {
@@ -667,6 +699,7 @@ pub const EXAMPLE_CONFIG: &str = r#"{
   },
   "events": { "enabled": true },
   "telemetry": { "enabled": false, "endpoint": "http://localhost:4318" },
+  "revocation": { "notify_ps": true },
   "insecure_dev_mode": false
 }
 "#;

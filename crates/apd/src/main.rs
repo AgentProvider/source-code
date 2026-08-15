@@ -19,6 +19,7 @@ mod keys;
 mod problem;
 mod records;
 mod reqctx;
+mod revocation;
 mod router;
 mod storage;
 mod telemetry;

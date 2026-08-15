@@ -1337,3 +1337,187 @@ fn static_token_validation() {
     .unwrap();
     ok.validate().unwrap();
 }
+
+// ------------------------------------------------- AP → PS revocation (spec:
+// "the agent provider calls the PS's revocation endpoint with the agent token's
+// iss and jti")
+
+/// A Person Server that serves metadata with a `revocation_endpoint` and
+/// records every revocation POST it receives, including the signature headers
+/// so the test can assert the AP authenticated itself.
+async fn spawn_mock_ps() -> (
+    String,
+    std::sync::Arc<tokio::sync::Mutex<Vec<(String, Vec<(String, String)>)>>>,
+    tokio::task::JoinHandle<()>,
+) {
+    use http_body_util::BodyExt;
+    use hyper::service::service_fn;
+    use hyper_util::rt::TokioIo;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let issuer = format!("http://127.0.0.1:{port}");
+    let received = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+    let metadata = serde_json::json!({
+        "issuer": issuer,
+        "jwks_uri": format!("{issuer}/jwks.json"),
+        "revocation_endpoint": format!("{issuer}/revoke"),
+    })
+    .to_string();
+    let sink = received.clone();
+
+    let handle = tokio::spawn(async move {
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(p) => p,
+                Err(_) => break,
+            };
+            let metadata = metadata.clone();
+            let sink = sink.clone();
+            tokio::spawn(async move {
+                let io = TokioIo::new(stream);
+                let svc = service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                    let metadata = metadata.clone();
+                    let sink = sink.clone();
+                    async move {
+                        if req.uri().path() == "/revoke" {
+                            let hdrs: Vec<(String, String)> = req
+                                .headers()
+                                .iter()
+                                .map(|(k, v)| {
+                                    (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())
+                                })
+                                .collect();
+                            let body = req.into_body().collect().await.unwrap().to_bytes();
+                            sink.lock()
+                                .await
+                                .push((String::from_utf8_lossy(&body).to_string(), hdrs));
+                            return Ok::<_, std::convert::Infallible>(
+                                hyper::Response::builder()
+                                    .status(200)
+                                    .body(http_body_util::Full::new(hyper::body::Bytes::from("{}")))
+                                    .unwrap(),
+                            );
+                        }
+                        let body = if req.uri().path() == "/.well-known/aauth-person.json" {
+                            metadata
+                        } else {
+                            "{}".to_string()
+                        };
+                        Ok::<_, std::convert::Infallible>(
+                            hyper::Response::builder()
+                                .status(200)
+                                .header("content-type", "application/json")
+                                .body(http_body_util::Full::new(hyper::body::Bytes::from(body)))
+                                .unwrap(),
+                        )
+                    }
+                });
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, svc)
+                    .await;
+            });
+        }
+    });
+    (issuer, received, handle)
+}
+
+#[tokio::test]
+async fn revoke_notifies_person_server_with_iss_and_jti() {
+    let (ps_url, received, _h) = spawn_mock_ps().await;
+    let app = build_app("https://ap.example", "open").await;
+    let durable = generate_signing_key();
+    let ephemeral = generate_signing_key();
+
+    // Enroll with a `ps`, so revoke has somewhere to notify.
+    let durable_jwk = Jwk::from_verifying_key(&durable.verifying_key());
+    let ctx = AgentReq::new(Method::POST, AUTH, "/enroll")
+        .json(serde_json::json!({ "ps": ps_url }))
+        .into_ctx(&sigkey::serialize_hwk(&durable_jwk), &durable, now_unix());
+    let (status, body) = call(&app, Method::POST, "/enroll", ctx).await;
+    assert_eq!(status, StatusCode::CREATED, "enroll: {body}");
+    let agent_id = body["agent"].as_str().unwrap().to_string();
+    let local = aauth_core::ident::local_part(&agent_id).to_string();
+
+    // Two outstanding tokens → two revocations.
+    let t1 = get_agent_token(&app, &durable, &ephemeral, None).await;
+    let eph2 = generate_signing_key();
+    let t2 = get_agent_token(&app, &durable, &eph2, None).await;
+    let jti_of = |tok: &str| {
+        jwt::decode(tok).unwrap().payload["jti"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (j1, j2) = (jti_of(&t1), jti_of(&t2));
+
+    let path = format!("/admin/agents/{local}/revoke");
+    let admin_ctx = ReqCtx {
+        method: "POST".into(),
+        authority: AUTH.into(),
+        path: path.clone(),
+        query: String::new(),
+        headers: vec![("authorization".into(), "Bearer test-admin-token".into())],
+        body: Vec::new(),
+    };
+    let (status, body) = call(&app, Method::POST, &path, admin_ctx).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ps_notification"]["status"], "sent");
+    assert_eq!(body["ps_notification"]["tokens"], 2);
+
+    let got = received.lock().await;
+    assert_eq!(got.len(), 2, "one revocation per outstanding token");
+
+    let mut seen_jtis: Vec<String> = Vec::new();
+    for (body, hdrs) in got.iter() {
+        let v: serde_json::Value = serde_json::from_str(body).unwrap();
+        // (iss, jti) is the identifying pair — both REQUIRED.
+        assert_eq!(v["iss"], "https://ap.example");
+        seen_jtis.push(v["jti"].as_str().unwrap().to_string());
+
+        // The PS must be able to authenticate the caller: we sign as the AP
+        // itself with the jwks_uri scheme naming our issuer and active kid.
+        let h = |n: &str| hdrs.iter().find(|(k, _)| k == n).map(|(_, v)| v.as_str());
+        let sk = h("signature-key").expect("Signature-Key header");
+        assert!(sk.contains("jwks_uri"), "scheme: {sk}");
+        assert!(sk.contains("https://ap.example"), "id: {sk}");
+        assert!(sk.contains("aauth-agent.json"), "dwk: {sk}");
+        let si = h("signature-input").expect("Signature-Input header");
+        for c in ["@method", "@authority", "@path", "signature-key"] {
+            assert!(si.contains(c), "covered components missing {c}: {si}");
+        }
+        assert!(h("signature").is_some(), "Signature header");
+    }
+    seen_jtis.sort();
+    let mut want = vec![j1, j2];
+    want.sort();
+    assert_eq!(seen_jtis, want, "both tokens named by jti");
+}
+
+#[tokio::test]
+async fn revoke_without_ps_is_still_local() {
+    // No `ps` on the enrollment: local revocation must still succeed, and the
+    // outcome says why nothing was sent.
+    let app = build_app("https://ap.example", "open").await;
+    let durable = generate_signing_key();
+    let ephemeral = generate_signing_key();
+    let agent_id = enroll_open(&app, &durable).await;
+    let local = aauth_core::ident::local_part(&agent_id).to_string();
+    let _ = get_agent_token(&app, &durable, &ephemeral, None).await;
+
+    let path = format!("/admin/agents/{local}/revoke");
+    let admin_ctx = ReqCtx {
+        method: "POST".into(),
+        authority: AUTH.into(),
+        path: path.clone(),
+        query: String::new(),
+        headers: vec![("authorization".into(), "Bearer test-admin-token".into())],
+        body: Vec::new(),
+    };
+    let (status, body) = call(&app, Method::POST, &path, admin_ctx).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "revoked");
+    assert_eq!(body["ps_notification"]["status"], "no_ps");
+}

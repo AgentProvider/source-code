@@ -418,7 +418,7 @@ pub async fn agent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError>
     let ps_req = body.get("ps").and_then(|v| v.as_str());
     let ps = resolve_ps(app, record.ps.as_deref(), ps_req)?;
 
-    let (token, exp) = issue::agent_token(
+    let issued = issue::agent_token(
         app,
         &record.local,
         &ephemeral_jwk,
@@ -427,6 +427,9 @@ pub async fn agent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError>
         record.embed_claims.as_ref(),
         record.assurance.as_deref(),
     );
+    let issue::Issued { token, exp, jti } = issued;
+    // Name this token so a later revocation can reach the PS for it.
+    crate::revocation::record_issued_jti(app, &record.local, &jti, exp).await;
 
     // Best-effort issuance accounting.
     record.last_issued_at = aauth_core::now_unix();
@@ -522,7 +525,7 @@ pub async fn subagent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiErr
     let parent_embed = parent_record.as_ref().and_then(|r| r.embed_claims.clone());
     let parent_assurance = parent_record.as_ref().and_then(|r| r.assurance.clone());
 
-    let (token, exp) = issue::subagent_token(
+    let issued = issue::subagent_token(
         app,
         &parent,
         discriminator,
@@ -533,6 +536,12 @@ pub async fn subagent_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiErr
         parent_assurance.as_deref(),
     )
     .map_err(|e| ApiError::bad_request("invalid_request", e))?;
+    let issue::Issued { token, exp, jti } = issued;
+    let sub_local = parent
+        .subagent(discriminator)
+        .map(|id| id.local.clone())
+        .unwrap_or_default();
+    crate::revocation::record_issued_jti(app, &sub_local, &jti, exp).await;
 
     app.metrics
         .subagent_token

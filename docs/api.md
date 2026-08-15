@@ -157,8 +157,25 @@ controls). Disabled entirely if no admin token is configured.
 - `GET /admin/agents` → `{ "agents":[...], "count":N }`.
 - `GET /admin/agents/{local}` → the agent record (includes enrollment `method`,
   federated `issuer`/`subject`, and `embed_claims`).
-- `POST /admin/agents/{local}/revoke` — future token issuance refused
-  (existing tokens age out within ≤ their lifetime).
+- `POST /admin/agents/{local}/revoke` — future token issuance refused, **and
+  the agent's Person Server is notified** about tokens already issued. Returns
+  `{"local":..,"status":"revoked","ps_notification":{...}}`.
+
+  Per the spec's Token Revocation rules, the AP calls the PS's
+  `revocation_endpoint` once per outstanding token with `{"iss","jti"}` — the
+  pair recipients key revocation state by. apd tracks each issued `jti` under a
+  TTL equal to the token's remaining life, so the index self-prunes.
+
+  The call signs as the AP itself using the `jwks_uri` Signature-Key scheme
+  (`id` = your issuer, `dwk` = `aauth-agent.json`, `kid` = the active key), which
+  is how the PS confirms the caller is the `iss` of the token being revoked.
+
+  **Local revocation is authoritative and always succeeds.** The notification is
+  best effort; `ps_notification.status` is one of `sent`, `disabled`, `no_ps`,
+  `no_endpoint`, or `failed`, and is also written to the audit log. A PS that
+  cannot be reached never fails the operation — that access is then bounded by
+  the token lifetime, exactly as the spec describes. Disable with
+  `revocation.notify_ps: false`.
 - `POST /admin/agents/{local}/reinstate`.
 
 ## Audit events
