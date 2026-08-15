@@ -152,11 +152,8 @@ async fn post_inner(
     policy: &EgressPolicy,
 ) -> Result<u16, String> {
     let parsed = parse_url(url)?;
-    let addr = admit(&parsed, policy).await?;
-    let stream = TcpStream::connect(addr)
-        .await
-        .map_err(|e| format!("connect {addr}: {e}"))?;
-    stream.set_nodelay(true).ok();
+    let addrs = admit(&parsed, policy).await?;
+    let stream = connect_any(&addrs).await?;
     let response = if parsed.https {
         let server_name = rustls::pki_types::ServerName::try_from(parsed.host.clone())
             .map_err(|_| "invalid TLS server name".to_string())?;
@@ -235,8 +232,15 @@ fn is_reserved_host(host: &str) -> bool {
     RESERVED_TLDS.iter().any(|t| h.ends_with(t))
 }
 
-/// Resolve a host and admit exactly one address under the egress policy.
-async fn admit(parsed: &ParsedUrl, policy: &EgressPolicy) -> Result<SocketAddr, String> {
+/// Resolve a host and return every address the egress policy admits.
+///
+/// All of them, not just the first: a name commonly resolves to both an IPv6
+/// and an IPv4 address while the service listens on only one family, and
+/// picking one address up front turns that into an unreachable host. The
+/// rebinding defence is unaffected — under a strict policy the whole set is
+/// rejected if *any* address is private, so every address returned here has
+/// already been vetted.
+async fn admit(parsed: &ParsedUrl, policy: &EgressPolicy) -> Result<Vec<SocketAddr>, String> {
     if !parsed.https && !policy.allow_http {
         return Err("plain http egress not allowed".into());
     }
@@ -250,52 +254,45 @@ async fn admit(parsed: &ParsedUrl, policy: &EgressPolicy) -> Result<SocketAddr, 
         .await
         .map_err(|e| format!("dns error for {}: {e}", parsed.host))?
         .collect();
-    let addr = addrs
-        .iter()
-        .find(|a| policy.allow_private || ip_is_public(&a.ip()))
-        .ok_or_else(|| format!("no admissible address for {}", parsed.host))?;
     if !policy.allow_private && addrs.iter().any(|a| !ip_is_public(&a.ip())) {
+        // A name resolving to a mix of public and private addresses is the
+        // shape of a rebinding attack, so the whole answer is refused rather
+        // than filtered.
         return Err(format!(
             "host {} resolves to private addresses",
             parsed.host
         ));
     }
-    Ok(*addr)
+    let admitted: Vec<SocketAddr> = addrs
+        .into_iter()
+        .filter(|a| policy.allow_private || ip_is_public(&a.ip()))
+        .collect();
+    if admitted.is_empty() {
+        return Err(format!("no admissible address for {}", parsed.host));
+    }
+    Ok(admitted)
+}
+
+/// Connect to the first admitted address that accepts, reporting the last
+/// error if none do.
+async fn connect_any(addrs: &[SocketAddr]) -> Result<TcpStream, String> {
+    let mut last = String::new();
+    for addr in addrs {
+        match TcpStream::connect(addr).await {
+            Ok(s) => {
+                s.set_nodelay(true).ok();
+                return Ok(s);
+            }
+            Err(e) => last = format!("connect {addr}: {e}"),
+        }
+    }
+    Err(last)
 }
 
 async fn get_inner(url: &str, policy: &EgressPolicy) -> Result<Bytes, String> {
     let parsed = parse_url(url)?;
-    if !parsed.https && !policy.allow_http {
-        return Err("plain http egress not allowed".into());
-    }
-    if is_reserved_host(&parsed.host) {
-        return Err(format!(
-            "host {} is under a reserved TLD (RFC 2606/6761) and cannot resolve",
-            parsed.host
-        ));
-    }
-
-    // Resolve and pin one admitted address.
-    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((parsed.host.as_str(), parsed.port))
-        .await
-        .map_err(|e| format!("dns error for {}: {e}", parsed.host))?
-        .collect();
-    let addr = addrs
-        .iter()
-        .find(|a| policy.allow_private || ip_is_public(&a.ip()))
-        .ok_or_else(|| format!("no admissible address for {}", parsed.host))?;
-    if !policy.allow_private && addrs.iter().any(|a| !ip_is_public(&a.ip())) {
-        // Mixed public/private resolution smells like rebinding — refuse.
-        return Err(format!(
-            "host {} resolves to private addresses",
-            parsed.host
-        ));
-    }
-
-    let stream = TcpStream::connect(addr)
-        .await
-        .map_err(|e| format!("connect {addr}: {e}"))?;
-    stream.set_nodelay(true).ok();
+    let addrs = admit(&parsed, policy).await?;
+    let stream = connect_any(&addrs).await?;
 
     let response = if parsed.https {
         let server_name = rustls::pki_types::ServerName::try_from(parsed.host.clone())

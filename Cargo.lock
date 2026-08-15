@@ -38,6 +38,7 @@ dependencies = [
  "rustls-webpki",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tokio-rustls",
  "webpki-roots 0.26.11",

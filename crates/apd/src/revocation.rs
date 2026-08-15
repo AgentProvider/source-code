@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aauth_core::{sig, sigkey};
+use sha2::Digest;
 
 use crate::app::App;
 use crate::httpc;
@@ -188,17 +189,36 @@ async fn post_revocation(app: &Arc<App>, endpoint: &str, jti: &str) -> Result<u1
     let body = serde_json::json!({ "iss": app.cfg.issuer, "jti": jti })
         .to_string()
         .into_bytes();
+
+    // This request carries a body to a Person Server, so the signature must
+    // additionally cover `content-digest` and `content-type`: the body is what
+    // decides which token gets revoked, and without covering the digest a
+    // network attacker could swap the named `jti` while the signature still
+    // verified. The digest header is RFC 9530 (`sha-256=:<standard base64>:`).
+    let digest = format!(
+        "sha-256=:{}:",
+        aauth_core::b64::encode_std(&sha2::Sha256::digest(&body))
+    );
+    let content_type = "application/json";
+    let digest_for_sig = digest.clone();
+    let covered = move |name: &str| -> Option<String> {
+        match name {
+            "content-type" => Some(content_type.to_string()),
+            "content-digest" => Some(digest_for_sig.clone()),
+            _ => None,
+        }
+    };
+
     let (authority, path) = httpc::signing_parts(endpoint)?;
     let sig_key =
         sigkey::serialize_jwks_uri(&app.cfg.issuer, "aauth-agent.json", &app.keys.active_kid);
-    let no_headers = |_: &str| None;
     let signed = sig::sign_request(
         "POST",
         &authority,
         &path,
         "",
-        &[],
-        &no_headers,
+        &["content-type", "content-digest"],
+        &covered,
         &sig_key,
         &app.keys.active_key,
         aauth_core::now_unix(),
@@ -209,6 +229,7 @@ async fn post_revocation(app: &Arc<App>, endpoint: &str, jti: &str) -> Result<u1
         ("signature-input".to_string(), signed.signature_input),
         ("signature".to_string(), signed.signature),
         ("signature-key".to_string(), signed.signature_key),
+        ("content-digest".to_string(), digest),
     ];
     httpc::post_json(endpoint, &body, &headers, &app.egress).await
 }

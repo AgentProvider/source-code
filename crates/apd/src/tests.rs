@@ -1480,12 +1480,30 @@ async fn revoke_notifies_person_server_with_iss_and_jti() {
         // The PS must be able to authenticate the caller: we sign as the AP
         // itself with the jwks_uri scheme naming our issuer and active kid.
         let h = |n: &str| hdrs.iter().find(|(k, _)| k == n).map(|(_, v)| v.as_str());
+
+        // The body decides which token is revoked, so it must be bound to the
+        // signature: a correct Content-Digest, and both it and content-type
+        // among the covered components.
+        use sha2::Digest;
+        let want = format!(
+            "sha-256=:{}:",
+            aauth_core::b64::encode_std(&sha2::Sha256::digest(body.as_bytes()))
+        );
+        assert_eq!(h("content-digest"), Some(want.as_str()), "Content-Digest");
+
         let sk = h("signature-key").expect("Signature-Key header");
         assert!(sk.contains("jwks_uri"), "scheme: {sk}");
         assert!(sk.contains("https://ap.example"), "id: {sk}");
         assert!(sk.contains("aauth-agent.json"), "dwk: {sk}");
         let si = h("signature-input").expect("Signature-Input header");
-        for c in ["@method", "@authority", "@path", "signature-key"] {
+        for c in [
+            "@method",
+            "@authority",
+            "@path",
+            "signature-key",
+            "content-type",
+            "content-digest",
+        ] {
             assert!(si.contains(c), "covered components missing {c}: {si}");
         }
         assert!(h("signature").is_some(), "Signature header");

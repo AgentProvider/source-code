@@ -156,6 +156,13 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .cloned();
     let poll = args.iter().any(|a| a == "--poll");
+    // Bind the enrolled agent to a Person Server, so the issued agent token
+    // carries `ps` and the AP knows where to send a revocation later.
+    let ps = args
+        .iter()
+        .position(|a| a == "--ps")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
 
     let mut pass = 0usize;
     let mut fail = 0usize;
@@ -172,7 +179,10 @@ fn main() {
         &format!("{ap}/enroll"),
         &hwk,
         &durable,
-        Some(&serde_json::json!({})),
+        Some(&match &ps {
+            Some(p) => serde_json::json!({ "ps": p }),
+            None => serde_json::json!({}),
+        }),
         None,
     );
     let enrolled: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::json!({}));
