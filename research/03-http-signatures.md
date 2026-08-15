@@ -59,8 +59,17 @@ Details that bite:
 - `created` REQUIRED, Integer, must be within the server's validity window of now
   (default **60 seconds**, configurable/advertised as `signature_window`). Outside →
   `invalid_signature`. `expires` optional; if present and past → reject.
-- When `AAuth-Mission` is sent, `aauth-mission` MUST be covered. When
-  `Authorization: AAuth <opaque>` is sent, `authorization` MUST be covered.
+- When `Authorization: AAuth <opaque>` is sent, `authorization` MUST be covered.
+  (The `AAuth-Mission` header was **removed in -11**, so the rule that
+  `aauth-mission` must be covered is gone with it — a mission now reaches a
+  resource only inside a PS-issued token.)
+- A request carrying a **body to a PS or AS endpoint** MUST additionally sign
+  `content-digest` and `content-type` (-11). Those requests decide what is
+  authorized and only their tokens were self-protecting. This does **not** extend
+  to resources — bodyless requests and streamed uploads make a blanket rule wrong
+  there, so resources keep declaring what they need via
+  `additional_signature_components`. AP ceremony endpoints are not covered by the
+  MUST either; `apd` accepts extra covered components but does not require them.
 - Algorithms: **Ed25519 MUST**; ECDSA P-256 SHOULD. Every JWK MUST carry a
   *fully-specified* `alg` — the JOSE identifier `Ed25519` (RFC 9864), **not** the
   polymorphic `EdDSA`, and never `none`/symmetric (sig-key §3.3, Algorithm
@@ -68,8 +77,17 @@ Details that bite:
   polymorphic, and MUST NOT infer the algorithm from other key parameters.
   Two distinct `alg` namespaces coexist: the **JOSE** `alg` (`Ed25519`, in JWK
   members, JWT headers, and the `hwk` scheme) and the **RFC 9421 HTTP Message
-  Signature** `alg` (`ed25519`, lowercase, in `Signature-Input`) — if
-  `Signature-Input` carries the latter it must be consistent with the key.
+  Signature** `alg` parameter in `Signature-Input`.
+- **The `alg` signature parameter MUST NOT be sent, and verifiers MUST IGNORE it
+  if present** (RFC 9421 §3.3.7): under the JOSE algorithms this profile uses the
+  algorithm is signaled by the key, and JWA identifiers are not registered in the
+  HTTP Signature Algorithms registry. So a verifier must not reject a request over
+  a mismatched `alg` parameter — the algorithm comes from the key material alone.
+  `keyid` SHOULD NOT be sent either; if present it MUST identify the same key, and
+  the verifier MUST take the key from `Signature-Key`.
+- Servers MAY advertise `accept_signature_algs` in their metadata — the exact set
+  of algorithms their verifier accepts, the out-of-band twin of the
+  `Accept-Signature-Alg` response header (-11).
 - Replay: `created` window is the primary defense; verifiers MAY keep a short-lived
   dedupe cache keyed by `(key-thumbprint, created, @method, @authority, @path)` for
   state-changing endpoints. No nonces in the profile.

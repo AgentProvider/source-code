@@ -13,8 +13,14 @@ Bodies are JSON. Request-body size is capped by `max_body_bytes` (default 64 KiB
 ## Public (unsigned)
 
 ### `GET /.well-known/aauth-agent.json`
-Agent Provider metadata. `issuer`, `jwks_uri`, optional display fields, and
-`event_endpoint` when events are enabled. `Cache-Control: public, max-age=300`.
+Agent Provider metadata. `issuer`, `jwks_uri`, `accept_signature_algs`, optional
+display fields, and `event_endpoint` when events are enabled.
+`Cache-Control: public, max-age=300`.
+
+`accept_signature_algs` (AAuth `-11`) is the **exact** set of fully-specified JWS
+algorithms this verifier accepts — neither a subset nor a superset — advertised
+before first contact rather than after a failure. It is the out-of-band twin of the
+`Accept-Signature-Alg` response header, and apd publishes `["Ed25519"]`.
 
 ### `GET /.well-known/jwks.json`
 The AP's public signing keys (Ed25519 JWKs, `kid`-tagged, active key first). Each

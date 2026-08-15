@@ -103,13 +103,23 @@ keys + `jwks_uri` for this):
   "iss": "https://resource.example", "dwk": "aauth-resource.json",
   "aud": "<agent's ps claim, or your AS>", "jti": "…",
   "agent": "<agent identifier from its token>",
-  "agent_jkt": "<RFC7638 thumbprint of the agent's current signing key>",
   "iat": …, "exp": "≤ 5 minutes",
   "scope": "data.read data.write",
-  "mission": {"approver": "…", "s256": "…"},  // echo AAuth-Mission if present
-  "account": "acct_1234"                       // echo the request's account param, if sent
+  "ps": "<iss of the person token you verified>",
+  "sub": "<sub from that person token>",
+  "presented_jti": "<jti of that person token>",
+  "mission_s256": "…",       // copied from the person token, if present
+  "account": "acct_1234"     // echo the request's account param, if sent
 }
 ```
+
+**Changed in AAuth -11.** Resource tokens no longer carry an agent identifier —
+`agent` and `agent_jkt` are gone. You MUST verify a **person token**
+(`aa-person+jwt`, presented via `Signature-Key` in place of the agent token)
+before issuing a resource token, and you copy `ps`, `sub`, and the person token's
+`jti` as `presented_jti` into it. The PS resolves that `jti` against its own
+record and rejects a mismatch, which is what makes mission stripping detectable.
+The `mission` object became the `mission_s256` claim.
 
 Deliver it either from your `authorization_endpoint` (`{"resource_token": "…"}`) or as a
 challenge: `401` + `AAuth-Requirement: requirement=auth-token; resource-token="eyJ…"`.

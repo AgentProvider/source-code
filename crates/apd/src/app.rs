@@ -68,6 +68,15 @@ pub fn build_agent_metadata(cfg: &Config) -> serde_json::Value {
         "jwks_uri".into(),
         format!("{}/.well-known/jwks.json", cfg.issuer).into(),
     );
+    // Common metadata field (AAuth -11): the exact set of fully-specified JWS
+    // algorithms this server's verifier accepts — neither a subset nor a
+    // superset — advertised before first contact rather than after a failure.
+    // It is the out-of-band twin of the `Accept-Signature-Alg` response header.
+    // apd verifies Ed25519 only, so the set is exactly that.
+    doc.insert(
+        "accept_signature_algs".into(),
+        serde_json::json!([aauth_core::jwk::ALG_ED25519]),
+    );
     if let Some(v) = &cfg.metadata.name {
         doc.insert("name".into(), v.clone().into());
     }
@@ -96,4 +105,32 @@ pub fn build_agent_metadata(cfg: &Config) -> serde_json::Value {
         );
     }
     serde_json::Value::Object(doc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_advertises_exact_accept_signature_algs() {
+        // AAuth -11 common metadata: the list is "exactly the set, neither a
+        // subset nor a superset" of what our verifier accepts. apd is
+        // Ed25519-only, so it must be exactly ["Ed25519"] — and it must agree
+        // with the Accept-Signature-Alg header we emit on unsupported_algorithm.
+        let cfg: Config = serde_json::from_value(serde_json::json!({
+            "issuer": "https://ap.example",
+            "storage": { "backend": "memory" },
+            "enrollment": { "methods": ["open"] },
+        }))
+        .unwrap();
+        let doc = build_agent_metadata(&cfg);
+        assert_eq!(
+            doc.get("accept_signature_algs").unwrap(),
+            &serde_json::json!(["Ed25519"])
+        );
+        assert_eq!(
+            doc.get("issuer").unwrap().as_str().unwrap(),
+            "https://ap.example"
+        );
+    }
 }

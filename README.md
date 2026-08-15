@@ -274,7 +274,7 @@ cargo clippy --workspace --all-targets      # zero warnings
 
 ## Status & license
 
-**Demo mode.** Implements `draft-hardt-oauth-aauth-protocol-10` and companion
+**Demo mode.** Implements `draft-hardt-oauth-aauth-protocol-11` and companion
 drafts (`bootstrap-01`, `events-00`, `httpbis-signature-key-08`) as of 2026-08.
 AAuth is an evolving IETF Internet-Draft family and **not yet a released
 standard**, so `apd` announces demo mode at runtime — a startup banner, a

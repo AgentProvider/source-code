@@ -10,7 +10,7 @@ out as such.
 
 | Note | Covers | Read it if you're… |
 |---|---|---|
-| [01 — Protocol overview](01-aauth-protocol-overview.md) | Parties, tokens, the four access modes, every shared primitive (requirements, deferred responses, interaction codes, identifiers, JWKS discovery, revocation), missions & delegation at a glance | …new to AAuth, or want one document that maps the whole protocol |
+| [01 — Protocol overview](01-aauth-protocol-overview.md) | Parties, tokens, the five access modes, every shared primitive (requirements, deferred responses, interaction codes, identifiers, JWKS discovery, revocation), missions & delegation at a glance | …new to AAuth, or want one document that maps the whole protocol |
 | [02 — The Agent Provider role](02-agent-provider.md) | The AP's normative obligations, the two-key/single-key key model, identifier strategy, the endpoints this AP defines, multi-instance & security requirements | …working on `apd` itself, or writing another AP |
 | [03 — HTTP signatures](03-http-signatures.md) | RFC 9421 signature base, the AAuth profile, every `Signature-Key` scheme (`hwk`/`jwt`/`jkt-jwt`/`jwks_uri`), `Signature-Error`, structured fields, JWK/thumbprint, egress admission | …implementing signing or verification |
 | [04 — Connecting agents](04-connecting-agents.md) | End-to-end agent lifecycle: enroll → refresh → sign → talk to resources → PS flow → sub-agents → events, plus a failure-handling cheat sheet | …building an agent that uses this AP |
@@ -19,13 +19,20 @@ out as such.
 
 ## Source drafts (as read, 2026-08)
 
-- `draft-hardt-oauth-aauth-protocol-10` — the core protocol (adds the fully-specified
-  `alg` requirement, `unsupported_algorithm`, and the `account` request parameter)
+- `draft-hardt-oauth-aauth-protocol-11` — the core protocol. Adds the **person token**
+  (`aa-person+jwt`, PS-issued), a fifth access mode, `accept_signature_algs` in metadata,
+  `mission_s256` in place of the `mission` object, and removes the `AAuth-Mission`
+  header. -10 added the fully-specified `alg` requirement, `unsupported_algorithm`, and
+  the `account` request parameter.
 - `draft-hardt-aauth-bootstrap-01` — informational AP enrollment/refresh patterns
 - `draft-hardt-aauth-events-00` — event subscription & delivery
 - `draft-hardt-httpbis-signature-key-08` — `Signature-Key`/`Signature-Error`/`Accept-Signature`;
   §3.3 Algorithm Determination (fully-specified `alg`, no polymorphic `EdDSA`), §4.2
   `Accept-Signature-Alg`
+- `draft-hardt-aauth-budgets` — **exploratory**: a `budget` claim and the `AAuth-Budget`
+  response header, to cap what an agent may spend at metered resources. Builds on TPX.
+  Budget and approval, not payment. **The Agent Provider has no role** — the draft says
+  so explicitly: where the AP pays for inference, "nothing in this document applies".
 - `draft-hardt-aauth-r3-*` — Rich Resource Requests / vocabularies (directional; MCP mapping)
 - `interop-demo-profile.md` — the five interop surfaces
 

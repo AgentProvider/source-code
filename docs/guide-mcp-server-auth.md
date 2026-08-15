@@ -207,8 +207,10 @@ It's an `aa-resource+jwt` you sign:
 ```
 
 (Four-party: set `aud` to *your* Access Server instead; the flow on your side is
-otherwise identical. If the agent sent an `AAuth-Mission` header, echo its
-`{approver, s256}` into a `mission` claim.)
+otherwise identical. Missions are no longer agent-asserted — the `AAuth-Mission`
+header was removed in AAuth `-11`. A mission now reaches you only as the
+`mission_s256` claim inside a PS-issued token, which you copy into the resource
+token you issue.)
 
 **b. Verify the auth token** the agent then presents
 (`Signature-Key: sig=jwt;jwt="<auth token>"`). Two independent checks:

@@ -47,7 +47,7 @@ use keys::KeySet;
 
 /// The draft revisions this build tracks (surfaced in the demo-mode notice).
 const TRACKED_DRAFTS: [&str; 4] = [
-    "draft-hardt-oauth-aauth-protocol-10",
+    "draft-hardt-oauth-aauth-protocol-11",
     "draft-hardt-aauth-bootstrap-01",
     "draft-hardt-aauth-events-00",
     "draft-hardt-httpbis-signature-key-08",

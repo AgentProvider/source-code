@@ -57,5 +57,5 @@ apd tracks IETF Internet-Drafts, and AAuth is not a released standard. The
 provider announces **demo mode** at runtime. Pin a version, and expect wire
 changes as the drafts mature.
 
-Current release: **0.2.0** — tracking `draft-hardt-oauth-aauth-protocol-10` and
+Current release: **0.3.0** — tracking `draft-hardt-oauth-aauth-protocol-11` and
 `draft-hardt-httpbis-signature-key-08`.

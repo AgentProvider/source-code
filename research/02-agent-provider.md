@@ -4,6 +4,10 @@
 > `draft-hardt-aauth-bootstrap-01` (informational enrollment/refresh patterns),
 > `draft-hardt-aauth-events-00` (AP as event inbox),
 > `draft-hardt-httpbis-signature-key-08` (key schemes used in the ceremonies).
+>
+> Current as of `draft-hardt-oauth-aauth-protocol-11` (14 Aug 2026). The person
+> token added in -11 is issued by the PS, not the AP; the AP's only -11 change is
+> the `accept_signature_algs` metadata field.
 
 ## 1. What an AP is
 

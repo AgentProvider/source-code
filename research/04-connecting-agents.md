@@ -85,7 +85,8 @@ is remembered).
 
 Per the AAuth profile (see `research/03-http-signatures.md`): cover at least
 `@method`, `@authority`, `@path`, `signature-key`; add `authorization` when sending
-`Authorization: AAuth …`; add `aauth-mission` when sending `AAuth-Mission`; add whatever
+`Authorization: AAuth …`; add `content-digest` and `content-type` on any request with a
+body to a **PS or AS** endpoint (-11); add whatever
 a resource's metadata lists in `additional_signature_components` (commonly
 `content-digest` — then also send an RFC 9530 `Content-Digest` header). Set `created` to
 now (NTP-synced; default server window is ±60 s). Present exactly one credential via

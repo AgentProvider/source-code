@@ -121,8 +121,9 @@ pub struct ParsedSignature {
     pub created: i64,
     pub scheme: SigKeyScheme,
     /// The `alg` parameter from `Signature-Input`, if the signer included one.
-    /// Optional per RFC 9421; when present it MUST be consistent with the key
-    /// material (checked in [`verify_parsed`]).
+    /// Agents MUST NOT send it and verifiers MUST ignore it (RFC 9421 §3.3.7);
+    /// retained here only so callers can log a non-conforming signer.
+    /// [`verify_parsed`] deliberately does not act on it.
     pub alg: Option<String>,
     /// The exact signature base string to verify.
     pub base: String,
@@ -343,20 +344,14 @@ pub fn verify_parsed(parsed: &ParsedSignature, key: &Jwk) -> Result<(), SigError
         err.required_input = None;
         return Err(err);
     }
-    // RFC 9421 §6.4 / sigkey draft §6.4: the algorithm is derived from the key,
-    // but if the signer included an `alg` parameter it MUST be consistent with
-    // the key material. This is the RFC 9421 HTTP Message Signature identifier
-    // (`ed25519`, lowercase) — a different registry from the JOSE `alg`
-    // (`Ed25519`) that the JWK/`hwk`/token headers carry. Our only key type is
-    // Ed25519 → `ed25519`.
-    if let Some(alg) = &parsed.alg {
-        if alg != "ed25519" {
-            return Err(SigError::new(
-                SigErrorCode::UnsupportedAlgorithm,
-                format!("Signature-Input alg '{alg}' is inconsistent with the Ed25519 key"),
-            ));
-        }
-    }
+    // AAuth §"Signature Parameters": "Agents MUST NOT include the `alg`
+    // signature parameter, and verifiers MUST ignore it if present, per
+    // RFC 9421 §3.3.7" — under the JOSE algorithms this profile uses the
+    // algorithm is signaled by the key, and JWA identifiers are not registered
+    // in the HTTP Signature Algorithms registry. So `parsed.alg` is parsed for
+    // observability and deliberately NOT acted on: rejecting a mismatch here
+    // would violate the MUST-ignore rule. The algorithm comes from the key
+    // material checked above.
     let vk = key
         .verifying_key()
         .map_err(|_| SigError::new(SigErrorCode::InvalidKey, "unparseable public key"))?;
@@ -650,12 +645,14 @@ mod tests {
     }
 
     #[test]
-    fn alg_consistency_enforced() {
+    fn alg_parameter_is_ignored() {
+        // AAuth: agents MUST NOT send the `alg` signature parameter, and
+        // verifiers MUST IGNORE it if present (RFC 9421 §3.3.7). So even a
+        // wildly wrong `alg` must not change the outcome — verification is
+        // decided by the key material and the signature bytes alone.
         let sk = generate_signing_key();
         let jwk = Jwk::from_verifying_key(&sk.verifying_key());
-        // An `alg` inconsistent with the Ed25519 key is rejected up front,
-        // before signature bytes are even checked.
-        let inconsistent = ParsedSignature {
+        let bogus = ParsedSignature {
             label: "sig".into(),
             covered: vec![],
             created: 0,
@@ -664,20 +661,38 @@ mod tests {
             base: "irrelevant".into(),
             signature: vec![0u8; 64],
         };
+        // Falls through to the signature check, NOT unsupported_algorithm.
         assert_eq!(
-            verify_parsed(&inconsistent, &jwk).unwrap_err().code,
-            SigErrorCode::UnsupportedAlgorithm
+            verify_parsed(&bogus, &jwk).unwrap_err().code,
+            SigErrorCode::InvalidSignature
         );
 
-        // A consistent `alg` passes the consistency gate and proceeds to the
-        // (here failing) signature check.
-        let consistent = ParsedSignature {
+        // Absent and present-but-different `alg` behave identically.
+        let absent = ParsedSignature { alg: None, ..bogus };
+        assert_eq!(
+            verify_parsed(&absent, &jwk).unwrap_err().code,
+            SigErrorCode::InvalidSignature
+        );
+    }
+
+    #[test]
+    fn alg_parameter_does_not_rescue_a_bad_key() {
+        // Ignoring `alg` must not weaken the key-type gate.
+        let sk = generate_signing_key();
+        let mut jwk = Jwk::from_verifying_key(&sk.verifying_key());
+        jwk.crv = "P-256".into();
+        let parsed = ParsedSignature {
+            label: "sig".into(),
+            covered: vec![],
+            created: 0,
+            scheme: SigKeyScheme::Hwk(jwk.clone()),
             alg: Some("ed25519".into()),
-            ..inconsistent
+            base: "irrelevant".into(),
+            signature: vec![0u8; 64],
         };
         assert_eq!(
-            verify_parsed(&consistent, &jwk).unwrap_err().code,
-            SigErrorCode::InvalidSignature
+            verify_parsed(&parsed, &jwk).unwrap_err().code,
+            SigErrorCode::UnsupportedAlgorithm
         );
     }
 }

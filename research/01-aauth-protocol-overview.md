@@ -68,13 +68,47 @@ Verification (by any receiver):
 6. `ps` (if present) is a valid server identifier
 7. `parent_agent` (if present) is a valid agent identifier → this is a sub-agent token
 
-### 3.2 Resource token — `typ: aa-resource+jwt` (issued by resources)
+### 3.2 Person token — `typ: aa-person+jwt` (issued by the PS) — **new in -11**
+
+Claims: `iss` (PS URL), `dwk: aauth-person.json`, `aud` (resource URL), `sub` (directed
+user identifier — the same value the PS uses in auth tokens), `cnf.jwk` (the agent's
+key), `jti`, `iat`, `exp`. Optional: `mission_s256`, `tenant`.
+
+Lifetime: **MUST NOT exceed 1 hour**, and MUST NOT outlive the agent token presented when
+it was requested, nor the mission's `expires_at` when `mission_s256` is present.
+
+The agent gets one from the PS's `person_token_endpoint` (REQUIRED in PS metadata) by
+making a signed POST presenting **its agent token** via `Signature-Key` with `scheme=jwt`.
+Parameters: `resource` (REQUIRED), `mission_s256`, `subagent_token`, `upstream_token`.
+It is then presented via `Signature-Key` **in place of** the agent token, and a resource
+MUST verify one before issuing a resource token.
+
+Why it exists: a resource calling the authorization endpoint wants to know the *person*,
+not the agent — and for many APIs knowing the person is enough, without a full resource
+token flow. It carries no authorization from the PS, so a resource that serves on
+identity alone effectively treats holding one as access.
+
+**Assurance floor:** it asserts recognition and agency, and guarantees continuity of
+`(iss, sub)`. A resource MUST NOT read it as evidence of identity proofing, legal
+identity, or any assurance level. (Distinct from apd's own `assurance` claim, which
+describes how the *agent* enrolled.)
+
+**The AP has no part in this exchange** — it neither issues nor consumes person tokens.
+`aauth-core` exposes `TYP_PERSON` so verifiers built on it can recognise the type.
+
+### 3.3 Resource token — `typ: aa-resource+jwt` (issued by resources)
 
 Claims: `iss` (resource URL), `dwk: aauth-resource.json`, `aud` (PS URL or AS URL),
-`jti`, `agent` (agent identifier), `agent_jkt` (RFC 7638 JWK thumbprint of the agent's
-current key), `iat`, `exp` (SHOULD NOT exceed **5 minutes**), `scope` (space-separated).
-Optional: `mission {approver, s256}`, `interaction {url, code}`, `account` (echoes the
-request's `account` parameter — below).
+`jti`, `ps`, `sub`, `presented_jti` (the `jti` of the person token whose verification
+established `ps` and `sub`), `iat`, `exp` (SHOULD NOT exceed **5 minutes**), `scope`.
+Optional: `mission_s256`, `interaction {url, code}`, `account`.
+
+**Changed in -11:** resource tokens carry **no agent identifier** — `agent` and
+`agent_jkt` are gone. The PS resolves the named person token and rejects any mismatch,
+which is what makes mission stripping detectable; comparing claims alone cannot, because
+concurrent missions mean several person tokens per agent and resource. A PS MUST retain a
+record of every person token it issues (beyond `exp`, by at least the longest resource
+token lifetime it accepts) and rejects an unretained `jti` with `unknown_person_token`.
 
 **`account` request parameter (AAuth-10, §6.1):** when a resource may hold more than
 one account for the same person, the agent MAY send an OPTIONAL `account` parameter to
@@ -86,15 +120,21 @@ Provider, neither consumes it nor issues resource tokens.
 The resource token is how a resource cryptographically asserts *what is being requested* —
 it prevents confused-deputy attacks and gives the resource a voice in every (re-)authorization.
 
-### 3.3 Auth token — `typ: aa-auth+jwt` (issued by PS or AS)
+### 3.4 Auth token — `typ: aa-auth+jwt` (issued by PS or AS)
 
 Claims: `iss` (PS or AS), `dwk` (`aauth-person.json` or `aauth-access.json`), `aud`
-(resource URL), `jti`, `agent`, `cnf.jwk` (agent's key), `iat`, `exp` (**MUST NOT exceed
-1 hour**; also MUST NOT outlive the agent token used to obtain it), at least one of
-`sub` (directed, pairwise user id) or `scope`. Optional: `act` (delegation chain, RFC 8693
-style but with `agent` instead of `sub` in each node), `mission`, `tenant`, plus OIDC claims.
+(resource URL), `jti`, `ps`, **`sub` (now REQUIRED**, directed pairwise user id),
+`cnf.jwk` (agent's key), `iat`, `exp` (**MUST NOT exceed 1 hour**; also MUST NOT outlive
+the agent token used to obtain it), `scope`. Optional: `mission_s256`, `tenant`, plus
+OIDC claims.
 
-### 3.4 Events tokens (from `draft-hardt-aauth-events`)
+**Changed in -11:** no agent identifier, and **`act` and the delegation chain are
+removed**. `sub` MUST be unique within the issuer: `(iss, sub)` is the identifier,
+`tenant` is organizational context and never part of it, and a `sub` from one issuer
+MUST NOT be matched against a record established under another, however the values
+compare.
+
+### 3.5 Events tokens (from `draft-hardt-aauth-events`)
 
 - **Subscribe token** `typ: aa-subscribe+jwt` — issued by the **AP**; see `06-events.md`.
 - **Event token** `typ: aa-event+jwt` — issued by resources, delivered to the AP's
@@ -102,25 +142,40 @@ style but with `agent` instead of `sub` in each node), `mission`, `tenant`, plus
 
 ## 4. Resource access modes
 
-Four modes, incrementally adoptable; governance (missions) is orthogonal.
+**Five modes as of -11** (was four), incrementally adoptable, sorted by what the resource
+ends up knowing and which party established it. Governance (missions) is orthogonal, and
+a resource MAY apply different modes to different endpoints (named via R3 operation
+access annotations). The values live in the new **AAuth Access Mode Value Registry**:
+`agent-token`, `person-token`, `session-token`, `auth-token`.
 
-1. **Identity-based** (agent ↔ resource): agent signs with its agent token; resource
-   decides based on who the agent is. Drop-in replacement for API keys.
+1. **Agent identity** (agent ↔ resource): agent signs with its agent token; resource
+   decides on who the agent is. Drop-in replacement for API keys.
    Challenge: `401` + `AAuth-Requirement: requirement=agent-token`.
-2. **Resource-managed / two-party**: resource runs its own authorization (its existing
-   OAuth/consent), typically via `202` + `requirement=interaction`, then returns an opaque
-   token via the **`AAuth-Access`** response header. Agent replays it in
-   `Authorization: AAuth <token68>` — and MUST cover `authorization` in its signature, so
-   the opaque token is useless without the agent's key.
-3. **PS-asserted / three-party**: resource discovers the agent's PS from the agent token's
-   `ps` claim and issues a resource token with `aud = PS`. Agent sends it to the PS token
-   endpoint; PS runs consent and returns an auth token asserting identity claims
-   (`sub`, `email`, `tenant`, `groups`, `roles`). Resource applies its own policy;
-   `(iss, sub)` namespaced per PS.
-4. **Federated / four-party**: resource has its own AS; resource token has `aud = AS`.
-   The PS (never the agent) calls the AS token endpoint, satisfies `requirement=claims` /
-   `interaction` / `402` payment steps, verifies the resulting auth token, and hands it to
-   the agent.
+2. **Resource-managed**: resource runs its own authorization (its existing OAuth/consent),
+   typically via `202` + `requirement=interaction`, then returns an opaque credential —
+   now named the **session token** — via the `AAuth-Access` response header. Agent replays
+   it in `Authorization: AAuth <token68>` and MUST cover `authorization` in its signature,
+   so the credential is useless without the agent's key. (The `access_mode` value
+   `aauth-access-token` was renamed `session-token`.)
+3. **Person identity** — *new in -11*: the resource challenges with
+   `requirement=person-token`, the agent fetches a person token from its PS and presents
+   it via `Signature-Key` in place of the agent token. The resource now knows the person
+   and MAY serve on that alone — no resource token, no auth token. This is the "many APIs
+   just need to know the person" case.
+4. **PS authorization / three-party**: the resource issues a resource token with
+   `aud = PS`; the agent sends it to the PS's `auth_token_endpoint` (renamed from
+   `token_endpoint` in -11); the PS runs consent and returns an auth token asserting
+   identity claims. Resource applies its own policy; `(iss, sub)` is namespaced per PS.
+5. **Federated authorization / four-party**: resource has its own AS; the resource token
+   has `aud = AS`. The PS (never the agent) calls the AS token endpoint, satisfies
+   `requirement=claims` / `interaction` / `402` payment steps, verifies the resulting auth
+   token, and hands it to the agent.
+
+**Where the PS comes from (corrected in -11).** The agent token's `ps` claim is the
+*advance signal* that the agent has a person server — enough for a resource to decide to
+challenge for a person token. It is **not** the PS of an issued authorization. That PS is
+the `iss` of the person token the resource verified, which the resource copies into the
+resource token's `ps`. Three places in earlier drafts said otherwise; -11 fixes them.
 
 How the parties grow with each mode (each adds one actor; the agent's request
 signature is constant throughout):
@@ -228,13 +283,33 @@ tokens are short-lived so every re-issuance is a policy evaluation point.
 ## 6. Missions & governance (PS territory — context for us)
 
 A mission is a Markdown-described, user-approved authorization context identified by
-`{approver (PS URL), s256}` where `s256` = base64url(SHA-256(exact approved mission blob
-bytes)). Carried by agents in the `AAuth-Mission` request header (SF Dictionary,
-`approver=...; s256=...`) and echoed by mission-aware resources into resource tokens.
-Resources/ASes MUST NOT dereference the blob. Missions have exactly two states: active,
-terminated. The PS keeps the mission log. The AP is *not* involved in missions — but note
-the covered-components rule: when `AAuth-Mission` is sent, `aauth-mission` is added to the
-signature's covered components.
+`mission_s256` = base64url(SHA-256(exact approved mission blob bytes)).
+
+**Reworked in -11:**
+
+- The **`AAuth-Mission` header is removed**, along with its registration. A mission now
+  reaches a resource only inside a PS-issued token, so it is no longer agent-asserted.
+  The covered-components rule that went with it is gone too.
+- The `mission` object is replaced by the **`mission_s256`** claim in person, resource,
+  and auth tokens. `approver` is dropped everywhere except the mission blob itself.
+- The approval response carries the blob base64url-encoded with `s256` alongside, so the
+  digest covers an unambiguous byte sequence and the agent can verify it like a JWT payload.
+- The blob gained `approved_resources` and MAY carry `expires_at`; no token carrying
+  `mission_s256` may outlive it. `capabilities` moved out of the blob into the approval
+  response, because it describes whether the PS can reach the person — not a term of the
+  mission, and it should not perturb the digest.
+- Mission **update** was added: it is appended to the log and digested, but does not change
+  the blob, `mission_s256`, or any token carrying it. A mission's meaning is the approved
+  blob **plus** its accepted updates, and an audit MUST read both.
+- Completion moved off the interaction endpoint to `POST {mission_endpoint}/{mission_s256}`
+  with `action: completion`. Termination reasons (`completed`, `revoked`, `expired`,
+  `superseded`, `administrative`) are an open set; `mission_expired` folded back into
+  `mission_terminated` with an OPTIONAL `termination_reason`.
+- A PS MUST answer identically — status, body, headers, **and timing** — whether a mission
+  does not exist or the agent does not own it, so the surface is not an existence oracle.
+
+Resources/ASes MUST NOT dereference the blob. The PS keeps the mission log.
+**The AP is not involved in missions.**
 
 ## 7. Delegation
 

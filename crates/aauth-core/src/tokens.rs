@@ -13,6 +13,11 @@ use crate::jwt::{self, DecodedJwt};
 pub const TYP_AGENT: &str = "aa-agent+jwt";
 pub const TYP_RESOURCE: &str = "aa-resource+jwt";
 pub const TYP_AUTH: &str = "aa-auth+jwt";
+/// Person token (AAuth -11): issued by a Person Server to identify the person
+/// to one resource, and presented via `Signature-Key` in place of the agent
+/// token. The Agent Provider neither issues nor consumes it; the constant is
+/// here so verifiers built on this crate can recognise the type.
+pub const TYP_PERSON: &str = "aa-person+jwt";
 pub const TYP_SUBSCRIBE: &str = "aa-subscribe+jwt";
 pub const TYP_EVENT: &str = "aa-event+jwt";
 
