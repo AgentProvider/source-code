@@ -120,9 +120,12 @@ jobs:
           EOF
           )
           TAG="v${V}"
-          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "apd v${V}" --notes "$NOTES" --target "$GITHUB_SHA"
-          else
-            gh release create "$TAG" --title "apd v${V}" --notes "$NOTES" || \
-              gh release edit "$TAG" --notes "$NOTES"
-          fi
+          # Create, or update if the release already exists. The previous form
+          # branched on `git rev-parse "$TAG"`, which is unreliable here: the
+          # default checkout is shallow and fetches no tags, so the tag that
+          # triggered this very run looks absent, the create-only branch is
+          # taken, and the job fails with 422 when the release exists. Trying
+          # create and falling back to edit needs no knowledge of local refs.
+          gh release create "$TAG" --title "apd v${V}" --notes "$NOTES" \
+              --target "$GITHUB_SHA" \
+            || gh release edit "$TAG" --title "apd v${V}" --notes "$NOTES"
