@@ -94,6 +94,45 @@ pub fn claim_matches(matcher: &serde_json::Value, actual: &serde_json::Value) ->
     }
 }
 
+/// Apply a claim gate, reporting *why* it failed.
+///
+/// The two failures need different words because they send an operator to
+/// different places. A claim the identity provider never sent is a provider
+/// configuration problem; a claim it sent with an unpermitted value is an
+/// entitlement problem. Okta makes this concrete: it omits `groups` from tokens
+/// until a claim is configured on the authorization server, so a perfectly
+/// correct group gate denies everyone. Told only that the claim "does not
+/// satisfy policy", an operator goes and checks group membership — which was
+/// never the problem — and finds it correct.
+///
+/// `subject` names the credential ("assertion", "admin token") so the same
+/// wording serves every gate.
+pub fn check_claim_gate<'a, I>(
+    subject: &str,
+    claims: &serde_json::Value,
+    required: I,
+) -> Result<(), String>
+where
+    I: IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
+{
+    for (path, matcher) in required {
+        match lookup_claim(claims, path) {
+            None => {
+                return Err(format!(
+                    "{subject} has no '{path}' claim; the identity provider is not sending it"
+                ))
+            }
+            Some(actual) if !claim_matches(matcher, actual) => {
+                return Err(format!(
+                    "{subject} claim '{path}' does not have a permitted value"
+                ))
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(())
+}
+
 /// Is `sub` (a `spiffe://…` ID) within `domain` (normalized `spiffe://<td>`)?
 /// True for the trust-domain root itself and any workload path beneath it.
 fn sub_in_domain(sub: &str, domain: &str) -> bool {
@@ -231,13 +270,7 @@ pub async fn verify_assertion(
     }
 
     // ---- required claims ----
-    for (path, matcher) in &issuer.cfg.required_claims {
-        let actual = lookup_claim(&decoded.payload, path)
-            .ok_or_else(|| format!("assertion missing required claim '{path}'"))?;
-        if !claim_matches(matcher, actual) {
-            return Err(format!("assertion claim '{path}' does not satisfy policy"));
-        }
-    }
+    check_claim_gate("assertion", &decoded.payload, &issuer.cfg.required_claims)?;
 
     // ---- SAN policy (x5c) ----
     if !issuer.cfg.required_sans.is_empty() {

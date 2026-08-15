@@ -24,7 +24,7 @@ use hyper::StatusCode;
 
 use crate::app::App;
 use crate::config::AdminOidcConfig;
-use crate::enrollment::assertion::claim_matches;
+use crate::enrollment::assertion::check_claim_gate;
 use crate::problem::ApiError;
 use crate::reqctx::ReqCtx;
 
@@ -113,6 +113,18 @@ async fn verify_oidc(
         )));
     }
 
+    // A `cnf` claim means the identity provider sender-constrained this token
+    // (DPoP, mTLS): it is meant to be useless to anyone who cannot prove
+    // possession of the confirmation key. We validate bearer credentials only,
+    // so accepting it would silently convert a sender-constrained token into a
+    // bearer token — precisely the downgrade the constraint exists to prevent,
+    // and invisible to the operator who deliberately turned it on.
+    if decoded.payload.get("cnf").is_some() {
+        return Err(unauthorized(
+            "this token is sender-constrained (cnf); apd validates bearer tokens only",
+        ));
+    }
+
     // `iss` is checked before any key is fetched: the issuer decides which JWKS
     // we would go and read, so a token naming someone else's IdP must not cause
     // a request to it.
@@ -175,16 +187,8 @@ async fn verify_oidc(
     // Authorization. Authenticating against the company IdP proves employment,
     // not entitlement — without a claim gate every account could administer the
     // provider, so an empty gate is refused at config load rather than here.
-    for (path, matcher) in &cfg.required_claims {
-        let actual = crate::enrollment::assertion::lookup_claim(&decoded.payload, path);
-        let ok = actual.map(|v| claim_matches(matcher, v)).unwrap_or(false);
-        if !ok {
-            return Err(ApiError::forbidden(
-                "forbidden",
-                format!("admin token does not satisfy required claim '{path}'"),
-            ));
-        }
-    }
+    check_claim_gate("admin token", &decoded.payload, &cfg.required_claims)
+        .map_err(|detail| ApiError::forbidden("forbidden", detail))?;
 
     let subject = decoded
         .payload

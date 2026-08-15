@@ -132,6 +132,10 @@ action carries the operator's name:
 The shared-token case is labelled `static-token` rather than `admin`, so a
 reviewer can see at a glance which actions carried no operator identity.
 
+Per-provider setup — Okta, Entra, Google, Keycloak, Auth0 — is in
+[identity-providers.md](identity-providers.md), including the Okta groups claim
+that is absent by default and denies everyone until you add it.
+
 **`required_claims` may not be empty.** Authenticating against the company IdP
 proves employment, not entitlement — an empty gate would make every account with
 a login an administrator. apd refuses to start rather than accept that. Matchers

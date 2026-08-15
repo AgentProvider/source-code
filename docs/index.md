@@ -37,6 +37,7 @@ How an agent proves it may have an identity.
 ## Operate
 
 - [Configuration](configuration.md) — every field, environment overrides, storage backends
+- [Identity providers](identity-providers.md) — enterprise SSO for the admin API: Okta, Entra, Google, Keycloak, Auth0
 - [HTTP API](api.md) — endpoints, request and response shapes, audit events
 - [Deploy](deployment.md) — TLS, scaling, key rotation, the image and Helm chart
 

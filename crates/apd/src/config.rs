@@ -524,13 +524,34 @@ impl Config {
                 )
             })?;
         if let Some(o) = &self.admin_oidc {
-            aauth_core::ident::validate_server_identifier(&o.issuer, self.insecure_dev_mode)
-                .map_err(|_| {
-                    format!(
-                        "admin_oidc.issuer '{}' is not a valid https server identifier",
-                        o.issuer
-                    )
-                })?;
+            // An OIDC issuer is not an AAuth server identifier, and must not be
+            // validated as one. AAuth requires a bare origin, but identity
+            // providers routinely put the issuer on a path — an Okta custom
+            // authorization server is `https://acme.okta.com/oauth2/default`,
+            // Entra is `https://login.microsoftonline.com/<tenant>/v2.0`,
+            // Keycloak is `https://host/realms/<realm>`. Requiring an origin
+            // here would leave only Okta's *org* server, which is precisely the
+            // one that cannot mint a token with our audience. So: same rule as
+            // a trusted enrollment issuer — an https URL, and http only when
+            // running in development mode.
+            if !o.issuer.starts_with("https://")
+                && !(self.insecure_dev_mode && o.issuer.starts_with("http://"))
+            {
+                return Err(format!(
+                    "admin_oidc.issuer '{}' must be an https URL \
+                     (set insecure_dev_mode=true for local http development)",
+                    o.issuer
+                ));
+            }
+            // Discovery appends to the issuer, and the token's `iss` is
+            // compared to it exactly, so a trailing slash silently breaks both.
+            if o.issuer.ends_with('/') {
+                return Err(format!(
+                    "admin_oidc.issuer '{}' must not end with a slash: it is compared to the \
+                     token's iss exactly, and discovery is appended to it",
+                    o.issuer
+                ));
+            }
             if o.audience.trim().is_empty() {
                 return Err(
                     "admin_oidc.audience must be set: without it, a token the IdP \

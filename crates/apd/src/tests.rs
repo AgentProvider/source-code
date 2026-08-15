@@ -1657,13 +1657,21 @@ async fn unreachable_issuer_is_not_reported_as_unknown_key() {
 // everyone when one leaves.
 
 async fn admin_sso_app(idp_issuer: &str, required: serde_json::Value) -> Arc<App> {
+    admin_sso_app_with(idp_issuer, "apd-admin", required).await
+}
+
+async fn admin_sso_app_with(
+    idp_issuer: &str,
+    audience: &str,
+    required: serde_json::Value,
+) -> Arc<App> {
     let json = serde_json::json!({
         "issuer": "https://ap.example",
         "storage": { "backend": "memory" },
         "enrollment": { "methods": ["open"] },
         "admin_oidc": {
             "issuer": idp_issuer,
-            "audience": "apd-admin",
+            "audience": audience,
             "required_claims": required,
             "principal_claim": "email",
         },
@@ -1815,6 +1823,262 @@ async fn admin_sso_rejects_a_token_from_another_issuer() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// Spawn a mock shaped like an Okta **custom authorization server**.
+///
+/// Two things differ from a plain OIDC mock, and both have bitten generic OIDC
+/// clients before:
+///
+/// - The issuer carries a **path component** (`/oauth2/default`). Discovery is
+///   the issuer with the well-known suffix appended, so it lands on
+///   `/oauth2/default/.well-known/openid-configuration` — not at the host root,
+///   which is where an implementation that parsed out the origin would look.
+/// - The JWKS lives at Okta's own `/v1/keys`, reached only by reading
+///   `jwks_uri` out of the discovery document rather than assuming a path.
+///
+/// The key is Ed25519 for test convenience; Okta signs RS256, whose
+/// verification is pinned separately against the RFC 7515 A.2 test vector.
+async fn spawn_mock_okta(kid: &str, key: &SigningKey) -> (String, tokio::task::JoinHandle<()>) {
+    use hyper::server::conn::http1;
+    use hyper::service::service_fn;
+    use hyper_util::rt::TokioIo;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let issuer = format!("http://127.0.0.1:{port}/oauth2/default");
+
+    let mut jwk = Jwk::from_verifying_key(&key.verifying_key());
+    jwk.kid = Some(kid.to_string());
+    jwk.alg = Some("EdDSA".into());
+    let jwks = serde_json::json!({ "keys": [jwk] }).to_string();
+    let discovery = serde_json::json!({
+        "issuer": issuer,
+        "jwks_uri": format!("{issuer}/v1/keys"),
+        "authorization_endpoint": format!("{issuer}/v1/authorize"),
+        "token_endpoint": format!("{issuer}/v1/token"),
+        "id_token_signing_alg_values_supported": ["RS256"],
+    })
+    .to_string();
+
+    let handle = tokio::spawn(async move {
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(p) => p,
+                Err(_) => break,
+            };
+            let jwks = jwks.clone();
+            let discovery = discovery.clone();
+            tokio::spawn(async move {
+                let io = TokioIo::new(stream);
+                let svc = service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                    let jwks = jwks.clone();
+                    let discovery = discovery.clone();
+                    async move {
+                        let (code, body) = match req.uri().path() {
+                            "/oauth2/default/.well-known/openid-configuration" => (200, discovery),
+                            "/oauth2/default/v1/keys" => (200, jwks),
+                            _ => (404, "{}".to_string()),
+                        };
+                        Ok::<_, std::convert::Infallible>(
+                            hyper::Response::builder()
+                                .status(code)
+                                .body(http_body_util::Full::new(hyper::body::Bytes::from(body)))
+                                .unwrap(),
+                        )
+                    }
+                });
+                let _ = http1::Builder::new().serve_connection(io, svc).await;
+            });
+        }
+    });
+    (issuer, handle)
+}
+
+#[tokio::test]
+async fn admin_sso_accepts_an_okta_shaped_token() {
+    let idp_key = generate_signing_key();
+    let (issuer, _h) = spawn_mock_okta("okta-kid-1", &idp_key).await;
+    let app = admin_sso_app_with(
+        &issuer,
+        "api://apd-admin",
+        serde_json::json!({"groups": "apd-admins"}),
+    )
+    .await;
+
+    let now = now_unix();
+    // Claims as an Okta custom-AS access token actually carries them: an opaque
+    // `sub`, the API audience (not the client id), `scp`, and `groups`/`email`
+    // only because a claim was configured on the authorization server.
+    let token = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "okta-kid-1"}),
+        serde_json::json!({
+            "iss": issuer,
+            "aud": "api://apd-admin",
+            "sub": "00u1a2b3c4d5e6f7g8h9",
+            "email": "alice@acme.example",
+            "groups": ["Everyone", "apd-admins", "eng-all"],
+            "scp": ["openid", "profile"],
+            "cid": "0oa9z8y7x6w5v4u3t2s1",
+            "iat": now, "exp": now + 3600, "auth_time": now,
+        }),
+        &idp_key,
+    );
+    let (status, body) = call(
+        &app,
+        Method::GET,
+        "/admin/agents",
+        admin_ctx("/admin/agents", &token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+}
+
+#[tokio::test]
+async fn admin_sso_says_when_the_idp_is_not_sending_the_claim() {
+    // The single most predictable Okta failure: `groups` is absent from tokens
+    // until a claim is configured on the authorization server, so a correct
+    // group gate denies everyone. The message has to send the operator to the
+    // identity provider — telling them the claim "does not satisfy policy"
+    // sends them to check a group membership that was never the problem.
+    let idp_key = generate_signing_key();
+    let (issuer, _h) = spawn_mock_okta("okta-kid-1", &idp_key).await;
+    let app = admin_sso_app_with(
+        &issuer,
+        "api://apd-admin",
+        serde_json::json!({"groups": "apd-admins"}),
+    )
+    .await;
+
+    let now = now_unix();
+    let no_groups_claim = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "okta-kid-1"}),
+        serde_json::json!({
+            "iss": issuer, "aud": "api://apd-admin", "sub": "00u1a2b3c4",
+            "email": "alice@acme.example", "iat": now, "exp": now + 3600,
+        }),
+        &idp_key,
+    );
+    let (status, body) = call(
+        &app,
+        Method::GET,
+        "/admin/agents",
+        admin_ctx("/admin/agents", &no_groups_claim),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(
+        body.to_string().contains("is not sending it"),
+        "an absent claim must name the identity provider as the cause: {body}"
+    );
+
+    // Present but not permitted is a different problem with a different fix,
+    // and must read differently.
+    let wrong_group = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "okta-kid-1"}),
+        serde_json::json!({
+            "iss": issuer, "aud": "api://apd-admin", "sub": "00u1a2b3c4",
+            "groups": ["Everyone", "eng-all"], "iat": now, "exp": now + 3600,
+        }),
+        &idp_key,
+    );
+    let (status, body) = call(
+        &app,
+        Method::GET,
+        "/admin/agents",
+        admin_ctx("/admin/agents", &wrong_group),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(
+        body.to_string().contains("does not have a permitted value")
+            && !body.to_string().contains("is not sending it"),
+        "a present-but-unpermitted claim must not blame the identity provider: {body}"
+    );
+}
+
+#[tokio::test]
+async fn admin_sso_refuses_a_sender_constrained_token() {
+    // Okta can issue DPoP-bound access tokens, which carry `cnf` and are meant
+    // to be useless without proof of possession of that key. Accepting one as a
+    // plain bearer would silently convert it back into a bearer token, undoing
+    // the property the operator turned DPoP on to get.
+    let idp_key = generate_signing_key();
+    let (issuer, _h) = spawn_mock_okta("okta-kid-1", &idp_key).await;
+    let app = admin_sso_app_with(
+        &issuer,
+        "api://apd-admin",
+        serde_json::json!({"groups": "apd-admins"}),
+    )
+    .await;
+
+    let now = now_unix();
+    let dpop_bound = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "okta-kid-1"}),
+        serde_json::json!({
+            "iss": issuer, "aud": "api://apd-admin", "sub": "00u1a2b3c4",
+            "groups": ["apd-admins"], "iat": now, "exp": now + 3600,
+            "cnf": { "jkt": "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I" },
+        }),
+        &idp_key,
+    );
+    let (status, body) = call(
+        &app,
+        Method::GET,
+        "/admin/agents",
+        admin_ctx("/admin/agents", &dpop_bound),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a sender-constrained token must not be accepted as a bearer: {body}"
+    );
+    assert!(
+        body.to_string().contains("sender-constrained"),
+        "body: {body}"
+    );
+}
+
+#[test]
+fn admin_sso_accepts_issuers_that_carry_a_path() {
+    // Real identity providers put the issuer on a path. Validating it as an
+    // AAuth server identifier (bare origin) would leave apd configurable only
+    // against Okta's org server — the one that cannot mint a token with our
+    // audience — so admin SSO would not work with Okta at all.
+    for issuer in [
+        "https://acme.okta.com/oauth2/default",
+        "https://login.microsoftonline.com/72f988bf-1234/v2.0",
+        "https://kc.acme.example/realms/employees",
+        "https://acme.okta.com",
+    ] {
+        let cfg: Config = serde_json::from_value(serde_json::json!({
+            "issuer": "https://ap.example",
+            "storage": { "backend": "memory" },
+            "admin_oidc": {
+                "issuer": issuer,
+                "audience": "api://apd-admin",
+                "required_claims": { "groups": "apd-admins" },
+            },
+        }))
+        .unwrap();
+        assert!(cfg.validate().is_ok(), "must accept issuer {issuer}");
+    }
+
+    // A trailing slash would break discovery and the exact `iss` comparison in
+    // ways that look like an attack rather than a typo, so it is refused.
+    let cfg: Config = serde_json::from_value(serde_json::json!({
+        "issuer": "https://ap.example",
+        "storage": { "backend": "memory" },
+        "admin_oidc": {
+            "issuer": "https://acme.okta.com/oauth2/default/",
+            "audience": "api://apd-admin",
+            "required_claims": { "groups": "apd-admins" },
+        },
+    }))
+    .unwrap();
+    assert!(cfg.validate().unwrap_err().contains("slash"));
 }
 
 #[test]
