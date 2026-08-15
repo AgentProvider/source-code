@@ -26,10 +26,25 @@ an agent is*, `psd` says *whose it is and what it may do*.
 
 ## 2. Motivation
 
-No good open Person Server exists. The role is the hardest in AAuth and the one
-where the protocol is growing fastest — 64% of the `-11` change bullets landed on
-it. Meanwhile a working AAuth deployment needs one the moment a resource wants
-to know the human, which is most non-trivial cases.
+The role is the hardest in AAuth and the one where the protocol is growing
+fastest — 64% of the `-11` change bullets landed on it. A working AAuth
+deployment needs one the moment a resource wants to know the human, which is
+most non-trivial cases.
+
+**Prior art exists — read it before designing.**
+[`christian-posta/aauth-person-server`](https://github.com/christian-posta/aauth-person-server)
+is an active Python reference implementation covering both the PS and the AP,
+with a combined portal. Its `MISSIONS.md`, `TRUST.md`, and `DATABASE.md` are
+worth more than this section: missions are 14 of the 34 `-11` bullets, and
+someone who has already built them has learned things we have not.
+
+Two things still justify `psd`. That implementation is explicitly *exploratory*,
+with `AAUTH_PS_INSECURE_DEV` modes that stub signature verification — our bar is
+that verification is never stubbed, and `insecure_dev_mode` relaxes transport
+only. And it states no target revision and appears to predate `-11`, so its
+person-token handling should be checked against the draft rather than copied.
+The accurate claim is therefore: one exploratory implementation exists, none is
+production-grade, and none is known to track `-11`.
 
 `apd` proved the shape: a small Rust daemon, verifiable by anyone, deployable by
 one engineer. `psd` should feel like that where it can, and be honest where it
@@ -107,6 +122,7 @@ must never grant UI access.
 | Decision | Choice | Rationale |
 |---|---|---|
 | Language | Rust | Matches `apd`; single static binary; `aauth-core` is Rust |
+| Vocabulary | the four current role names | "Agent Server" is the **pre-`-01`** name for the Agent Provider (renamed in `draft-…-01`). Reference code still uses it; `psd` must not. Use Agent Provider / Person Server / Resource / Access Server throughout. |
 | Protocol primitives | **`aauth-core`** | Role-agnostic; do not reimplement JWTs or RFC 9421. See [the crate guide](../crates/aauth-core/README.md) |
 | HTTP | `hyper` + `http-body-util` | Same as `apd`; no framework needed for ~10 routes |
 | Storage | **SQLite default, Postgres option** | *Departure from `apd`.* This data is relational and long-lived: bindings, consent, token records, audit. A KV store is the wrong shape. SQLite keeps single-binary self-hosting; Postgres covers shape C. |
