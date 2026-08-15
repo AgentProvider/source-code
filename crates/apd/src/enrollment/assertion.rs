@@ -67,6 +67,14 @@ pub fn claim_matches(matcher: &serde_json::Value, actual: &serde_json::Value) ->
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
+        // A multi-valued claim matches when any of its values does. `groups` is
+        // the case that matters: an identity provider sends an array, and an
+        // operator writing `{"groups": "apd-admins"}` means membership. Without
+        // this the rule can never match, so it fails closed but silently — the
+        // operator sees a correct-looking config that denies everyone.
+        serde_json::Value::Array(values) => {
+            return values.iter().any(|v| claim_matches(matcher, v))
+        }
         _ => return false,
     };
     match matcher {
@@ -390,5 +398,40 @@ mod tests {
         assert!(aud_contains(&serde_json::json!({"aud": ["y", "x"]}), "x"));
         assert!(!aud_contains(&serde_json::json!({"aud": ["y"]}), "x"));
         assert!(!aud_contains(&serde_json::json!({}), "x"));
+    }
+}
+
+#[cfg(test)]
+mod array_claim_tests {
+    use super::claim_matches;
+    use serde_json::json;
+
+    #[test]
+    fn multi_valued_claim_matches_when_any_value_does() {
+        // The `groups` case: identity providers send an array, and an operator
+        // writing a single group name means membership.
+        let groups = json!(["everyone", "apd-admins"]);
+        assert!(claim_matches(&json!("apd-admins"), &groups));
+        assert!(claim_matches(&json!("apd-*"), &groups));
+        assert!(claim_matches(&json!(["sre", "apd-admins"]), &groups));
+        assert!(!claim_matches(&json!("apd-owners"), &groups));
+        assert!(!claim_matches(&json!("admins"), &groups)); // not a substring match
+    }
+
+    #[test]
+    fn scalar_behaviour_is_unchanged() {
+        assert!(claim_matches(
+            &json!("system:sa:*"),
+            &json!("system:sa:runner")
+        ));
+        assert!(!claim_matches(&json!("a"), &json!("b")));
+        assert!(claim_matches(&json!(["a", "b"]), &json!("b")));
+        assert!(!claim_matches(&json!("x"), &json!({"nested": "x"})));
+    }
+
+    #[test]
+    fn an_empty_array_matches_nothing() {
+        // Otherwise a claim present but empty would satisfy a requirement.
+        assert!(!claim_matches(&json!("apd-admins"), &json!([])));
     }
 }

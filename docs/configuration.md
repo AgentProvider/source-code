@@ -88,6 +88,57 @@ Override per federated issuer with `"assurance": "<tier>"` (lowercase
 `[a-z0-9_]`, ≤32 chars). Sub-agents inherit their parent's tier. The claim is
 protected — a trusted issuer's `embed_claims` cannot forge it.
 
+## Admin API authentication
+
+The admin API accepts either a shared bearer token or a token from your identity
+provider. Configure both during a migration; configure only `admin_oidc` once
+everyone has moved.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `admin_token` | *(none)* | Shared bearer token. Prefer `APD_ADMIN_TOKEN`. |
+| `admin_oidc.issuer` | *(required)* | Your IdP's issuer URL. The token's `iss` must equal it exactly, and it is checked before any key is fetched. |
+| `admin_oidc.audience` | *(required)* | Required `aud`. Without it, a token your IdP minted for any other application would administer this provider. |
+| `admin_oidc.required_claims` | *(required, non-empty)* | Claim path → matcher. This is the authorization gate. |
+| `admin_oidc.principal_claim` | `sub` | Which claim names the operator in the audit log. `email` reads better in a review. |
+| `admin_oidc.jwks_uri` | *(discovery)* | Explicit JWKS URL, skipping discovery. |
+
+```json
+"admin_oidc": {
+  "issuer": "https://acme.okta.com",
+  "audience": "apd-admin",
+  "required_claims": { "groups": "apd-admins" },
+  "principal_claim": "email"
+}
+```
+
+Operators then call the API with a token from the IdP:
+
+```sh
+curl -X POST https://ap.example.com/admin/agents/<local>/revoke \
+  -H "Authorization: Bearer $(your-idp-cli token)"
+```
+
+**Why this exists.** A shared token proves only that the caller holds the secret.
+Every action looks identical afterwards, it cannot be withdrawn from one person,
+and offboarding means rotating it for everyone at once. With `admin_oidc` each
+action carries the operator's name:
+
+```json
+{"event":"agent_revoked","actor":"oidc:alice@acme.example","local":"k7q3p9n2"}
+{"event":"agent_revoked","actor":"static-token","local":"m4x8b1c5"}
+```
+
+The shared-token case is labelled `static-token` rather than `admin`, so a
+reviewer can see at a glance which actions carried no operator identity.
+
+**`required_claims` may not be empty.** Authenticating against the company IdP
+proves employment, not entitlement — an empty gate would make every account with
+a login an administrator. apd refuses to start rather than accept that. Matchers
+use the same syntax as trusted issuers: exact, an array of allowed values, or a
+trailing `*` prefix. A multi-valued claim such as `groups` matches when any of
+its values does.
+
 ## Revocation
 
 | Field | Default | Meaning |

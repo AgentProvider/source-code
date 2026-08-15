@@ -1648,3 +1648,195 @@ async fn unreachable_issuer_is_not_reported_as_unknown_key() {
     );
     assert!(status.is_client_error(), "status: {status}");
 }
+
+// ------------------------------------------------- enterprise SSO on /admin
+//
+// The value is not "a second way to authenticate" — it is that an action has a
+// name against it. A shared token makes every admin action anonymous and
+// identical, cannot be withdrawn from one person, and forces a rotation for
+// everyone when one leaves.
+
+async fn admin_sso_app(idp_issuer: &str, required: serde_json::Value) -> Arc<App> {
+    let json = serde_json::json!({
+        "issuer": "https://ap.example",
+        "storage": { "backend": "memory" },
+        "enrollment": { "methods": ["open"] },
+        "admin_oidc": {
+            "issuer": idp_issuer,
+            "audience": "apd-admin",
+            "required_claims": required,
+            "principal_claim": "email",
+        },
+        "insecure_dev_mode": true,
+    });
+    let cfg: Config = serde_json::from_value(json).unwrap();
+    cfg.validate().unwrap();
+    let (keys, _) = test_keyset();
+    let store = crate::storage::open(&cfg.storage).await.unwrap();
+    App::new(cfg, keys, store).unwrap()
+}
+
+fn admin_ctx(path: &str, bearer: &str) -> ReqCtx {
+    ReqCtx {
+        method: "GET".into(),
+        authority: AUTH.into(),
+        path: path.into(),
+        query: String::new(),
+        headers: vec![("authorization".into(), format!("Bearer {bearer}"))],
+        body: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn admin_sso_accepts_an_idp_token_and_names_the_operator() {
+    let idp_key = generate_signing_key();
+    let (issuer, _h) = spawn_mock_oidc("idp-1", &idp_key).await;
+    let app = admin_sso_app(&issuer, serde_json::json!({"groups": "apd-admins"})).await;
+
+    let now = now_unix();
+    let token = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "idp-1"}),
+        serde_json::json!({
+            "iss": issuer, "aud": "apd-admin", "sub": "00u123",
+            "email": "alice@acme.example", "groups": ["apd-admins", "everyone"],
+            "iat": now, "exp": now + 300,
+        }),
+        &idp_key,
+    );
+    let (status, body) = call(
+        &app,
+        Method::GET,
+        "/admin/agents",
+        admin_ctx("/admin/agents", &token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    // And the operator is named on a state-changing action.
+    let durable = generate_signing_key();
+    let agent = enroll_open(&app, &durable).await;
+    let local = aauth_core::ident::local_part(&agent).to_string();
+    let path = format!("/admin/agents/{local}/revoke");
+    let mut ctx = admin_ctx(&path, &token);
+    ctx.method = "POST".into();
+    let (status, _) = call(&app, Method::POST, &path, ctx).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn admin_sso_rejects_wrong_audience_and_missing_group() {
+    let idp_key = generate_signing_key();
+    let (issuer, _h) = spawn_mock_oidc("idp-1", &idp_key).await;
+    let app = admin_sso_app(&issuer, serde_json::json!({"groups": "apd-admins"})).await;
+    let now = now_unix();
+
+    // A token the IdP minted for a different application must not administer us.
+    let wrong_aud = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "idp-1"}),
+        serde_json::json!({
+            "iss": issuer, "aud": "some-other-app", "sub": "00u123",
+            "groups": ["apd-admins"], "iat": now, "exp": now + 300,
+        }),
+        &idp_key,
+    );
+    let (status, _) = call(
+        &app,
+        Method::GET,
+        "/admin/agents",
+        admin_ctx("/admin/agents", &wrong_aud),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "wrong audience must be refused"
+    );
+
+    // Authenticating proves employment, not entitlement.
+    let no_group = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "idp-1"}),
+        serde_json::json!({
+            "iss": issuer, "aud": "apd-admin", "sub": "00u999",
+            "groups": ["everyone"], "iat": now, "exp": now + 300,
+        }),
+        &idp_key,
+    );
+    let (status, body) = call(
+        &app,
+        Method::GET,
+        "/admin/agents",
+        admin_ctx("/admin/agents", &no_group),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "body: {body}");
+
+    // An expired token is refused even with the right group.
+    let expired = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "idp-1"}),
+        serde_json::json!({
+            "iss": issuer, "aud": "apd-admin", "sub": "00u123",
+            "groups": ["apd-admins"], "iat": now - 600, "exp": now - 60,
+        }),
+        &idp_key,
+    );
+    let (status, _) = call(
+        &app,
+        Method::GET,
+        "/admin/agents",
+        admin_ctx("/admin/agents", &expired),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_sso_rejects_a_token_from_another_issuer() {
+    // Signed by a key we do not trust, naming an issuer we do not trust: the
+    // iss check must fire before any key is fetched, so we never make a request
+    // to an attacker-named IdP.
+    let idp_key = generate_signing_key();
+    let (issuer, _h) = spawn_mock_oidc("idp-1", &idp_key).await;
+    let app = admin_sso_app(&issuer, serde_json::json!({"groups": "apd-admins"})).await;
+    let now = now_unix();
+    let evil = generate_signing_key();
+    let token = sign_jws_eddsa(
+        serde_json::json!({"alg": "EdDSA", "kid": "idp-1"}),
+        serde_json::json!({
+            "iss": "https://evil.example", "aud": "apd-admin", "sub": "00u1",
+            "groups": ["apd-admins"], "iat": now, "exp": now + 300,
+        }),
+        &evil,
+    );
+    let (status, _) = call(
+        &app,
+        Method::GET,
+        "/admin/agents",
+        admin_ctx("/admin/agents", &token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn admin_sso_refuses_an_open_authorization_gate() {
+    // required_claims is the gate. Empty means every account at the IdP is an
+    // administrator, which is never what an operator means to configure.
+    let cfg: Result<Config, _> = serde_json::from_value(serde_json::json!({
+        "issuer": "https://ap.example",
+        "storage": { "backend": "memory" },
+        "admin_oidc": { "issuer": "https://idp.example", "audience": "apd-admin" },
+    }));
+    let err = cfg.unwrap().validate().unwrap_err();
+    assert!(err.contains("required_claims"), "got: {err}");
+
+    let cfg: Config = serde_json::from_value(serde_json::json!({
+        "issuer": "https://ap.example",
+        "storage": { "backend": "memory" },
+        "admin_oidc": {
+            "issuer": "https://idp.example", "audience": "",
+            "required_claims": {"groups": "apd-admins"},
+        },
+    }))
+    .unwrap();
+    assert!(cfg.validate().unwrap_err().contains("audience"));
+}

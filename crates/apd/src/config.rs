@@ -43,9 +43,19 @@ pub struct Config {
     pub enrollment: EnrollmentConfig,
 
     /// Admin API bearer token. Prefer the APD_ADMIN_TOKEN env var.
-    /// If neither is set, the /admin API is disabled.
+    /// If neither this nor `admin_oidc` is set, the /admin API is disabled.
     #[serde(default)]
     pub admin_token: Option<String>,
+
+    /// Enterprise SSO for the admin API: accept an OIDC access/ID token from
+    /// the organisation's identity provider instead of (or alongside) the
+    /// shared bearer token.
+    ///
+    /// A shared token has no operator identity — every action is
+    /// indistinguishable, it cannot be revoked for one person, and offboarding
+    /// means rotating it for everyone. An IdP token names who acted.
+    #[serde(default)]
+    pub admin_oidc: Option<AdminOidcConfig>,
 
     /// Allow the `ps` in a token request body to differ from the enrollment's.
     #[serde(default = "default_true")]
@@ -100,6 +110,44 @@ pub struct Config {
 /// OpenTelemetry (metrics + traces) exported over OTLP/HTTP. Disabled by
 /// default. When enabled, signals are POSTed to `{endpoint}/v1/traces` and
 /// `{endpoint}/v1/metrics` (OTLP/HTTP + protobuf), the standard Collector shape.
+/// Enterprise SSO for the admin API.
+///
+/// The admin API is machine-facing — operators reach it with `curl`, a script,
+/// or CI — so this is bearer-token validation, not a browser redirect flow.
+/// The operator obtains a token from the IdP however their organisation
+/// already does, and presents it as `Authorization: Bearer <jwt>`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminOidcConfig {
+    /// The IdP's issuer URL. Discovery resolves the JWKS from it, and the
+    /// token's `iss` must equal it exactly.
+    pub issuer: String,
+
+    /// Required `aud`. Set it: a token minted for another application at the
+    /// same IdP would otherwise be accepted here.
+    pub audience: String,
+
+    /// Claim path -> matcher, using the same syntax as trusted issuers
+    /// (exact, array-of-allowed, or trailing-`*` prefix). This is the
+    /// authorization gate — without at least one entry, every employee with an
+    /// IdP account could administer the provider.
+    #[serde(default)]
+    pub required_claims: std::collections::BTreeMap<String, serde_json::Value>,
+
+    /// Which claim names the operator in the audit log. Default `sub`, but
+    /// `email` or `preferred_username` reads better in a review.
+    #[serde(default = "default_principal_claim")]
+    pub principal_claim: String,
+
+    /// Explicit JWKS URL, skipping discovery. Rarely needed.
+    #[serde(default)]
+    pub jwks_uri: Option<String>,
+}
+
+fn default_principal_claim() -> String {
+    "sub".to_string()
+}
+
 /// Whether, and how, the AP tells a Person Server that an agent's tokens are
 /// revoked (protocol spec, Token Revocation). Local revocation always happens;
 /// this only controls the outbound notification.
@@ -245,7 +293,7 @@ impl EnrollmentConfig {
 /// strict ones: an issuer with no `required_claims` still cannot mint agents
 /// beyond its own `issuer`/`audience` pair, and `embed_claims` can never write
 /// a claim the provider itself controls.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrustedIssuer {
     /// Unique operator-chosen name (used in logs/audit).
@@ -403,6 +451,22 @@ fn default_true() -> bool {
     true
 }
 
+impl TrustedIssuer {
+    /// Present the admin IdP as a trusted issuer, so key resolution reuses the
+    /// runtime built for federated enrollment rather than duplicating OIDC
+    /// discovery, egress admission and key caching for one extra caller.
+    pub fn for_admin_idp(o: &AdminOidcConfig) -> TrustedIssuer {
+        TrustedIssuer {
+            name: "admin-idp".to_string(),
+            issuer_type: "oidc".to_string(),
+            issuer: o.issuer.clone(),
+            audience: Some(o.audience.clone()),
+            jwks_uri: o.jwks_uri.clone(),
+            ..TrustedIssuer::default()
+        }
+    }
+}
+
 impl Config {
     pub fn load(path: &str) -> Result<Config, String> {
         let raw =
@@ -459,6 +523,38 @@ impl Config {
                     self.issuer
                 )
             })?;
+        if let Some(o) = &self.admin_oidc {
+            aauth_core::ident::validate_server_identifier(&o.issuer, self.insecure_dev_mode)
+                .map_err(|_| {
+                    format!(
+                        "admin_oidc.issuer '{}' is not a valid https server identifier",
+                        o.issuer
+                    )
+                })?;
+            if o.audience.trim().is_empty() {
+                return Err(
+                    "admin_oidc.audience must be set: without it, a token the IdP \
+                            minted for any other application would administer this provider"
+                        .into(),
+                );
+            }
+            // Authenticating against the company IdP proves employment, not
+            // entitlement. An empty gate would make every account with a login
+            // an administrator, which is almost never intended and is silent.
+            if o.required_claims.is_empty() {
+                return Err("admin_oidc.required_claims must not be empty: it is the \
+                            authorization gate, and without it every account at the identity \
+                            provider could administer this provider. Use a group or role \
+                            claim, e.g. {\"groups\": \"apd-admins\"}"
+                    .into());
+            }
+            for name in o.required_claims.keys() {
+                if name.trim().is_empty() {
+                    return Err("admin_oidc.required_claims has an empty claim name".into());
+                }
+            }
+        }
+
         if self.agent_token_ttl_secs == 0
             || self.agent_token_ttl_secs > aauth_core::tokens::AGENT_TOKEN_MAX_TTL_SECS
         {

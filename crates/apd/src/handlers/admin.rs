@@ -1,5 +1,9 @@
-//! Admin API under `/admin/*`, gated by a bearer token (config/env).
-//! Constant-time token comparison; disabled entirely when no token is set.
+//! Admin API under `/admin/*`.
+//!
+//! Every handler authenticates the caller first and, where it changes state,
+//! records who they were. A shared token makes every action anonymous and
+//! identical; an identity-provider token names the operator, which is what an
+//! audit of "who revoked this agent" actually needs.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,39 +15,9 @@ use crate::problem::{empty_status, json_ok, json_response, ApiError, Resp};
 use crate::records::*;
 use crate::reqctx::ReqCtx;
 
-use crate::enrollment::constant_time_eq as ct_eq;
-
-fn authorize(ctx: &ReqCtx, app: &App) -> Result<(), ApiError> {
-    let configured = app.cfg.admin_token.as_deref().ok_or_else(|| {
-        ApiError::not_found(
-            "not_found",
-            "admin API is disabled (no admin token configured)",
-        )
-    })?;
-    let presented = ctx
-        .header("authorization")
-        .and_then(|h| h.strip_prefix("Bearer ").map(|s| s.to_string()))
-        .ok_or_else(|| {
-            ApiError::new(
-                StatusCode::UNAUTHORIZED,
-                "unauthorized",
-                "missing bearer token",
-            )
-        })?;
-    if ct_eq(presented.as_bytes(), configured.as_bytes()) {
-        Ok(())
-    } else {
-        Err(ApiError::new(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "invalid admin token",
-        ))
-    }
-}
-
 /// `POST /admin/enrollment-tokens` → mint a single-use enrollment token.
 pub async fn mint_enrollment_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
-    authorize(ctx, app)?;
+    let who = crate::admin_auth::authenticate(ctx, app).await?;
     let body = ctx.parse_json()?;
     let ps = body.get("ps").and_then(|v| v.as_str());
     if let Some(ps) = ps {
@@ -72,7 +46,7 @@ pub async fn mint_enrollment_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp,
         .await?;
     app.audit.emit(
         "enrollment_token_minted",
-        serde_json::json!({ "ps": record.ps, "label": record.label, "ttl": ttl_secs }),
+        serde_json::json!({ "actor": who.actor, "ps": record.ps, "label": record.label, "ttl": ttl_secs }),
     );
     Ok(json_response(
         StatusCode::CREATED,
@@ -85,7 +59,7 @@ pub async fn mint_enrollment_token(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp,
 /// API-driven delegation path for orchestrators: register the key you just
 /// provisioned, no secret travels to the workload.
 pub async fn add_allowed_key(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
-    authorize(ctx, app)?;
+    let who = crate::admin_auth::authenticate(ctx, app).await?;
     if !app.cfg.enrollment.method_enabled("allowlist") {
         return Err(ApiError::bad_request(
             "method_disabled",
@@ -131,7 +105,7 @@ pub async fn add_allowed_key(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiEr
         .await?;
     app.audit.emit(
         "allowed_key_added",
-        serde_json::json!({ "jkt": jkt, "ps": record.ps, "label": record.label, "ttl": ttl }),
+        serde_json::json!({ "actor": who.actor, "jkt": jkt, "ps": record.ps, "label": record.label, "ttl": ttl }),
     );
     Ok(json_response(
         StatusCode::CREATED,
@@ -141,7 +115,7 @@ pub async fn add_allowed_key(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiEr
 
 /// `GET /admin/allowed-keys` → list pending pre-registered keys.
 pub async fn list_allowed_keys(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
-    authorize(ctx, app)?;
+    crate::admin_auth::authenticate(ctx, app).await?;
     let entries = app.store.scan_prefix("allowkey:").await?;
     let keys: Vec<serde_json::Value> = entries
         .iter()
@@ -155,19 +129,21 @@ pub async fn list_allowed_keys(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, Api
 
 /// `DELETE /admin/allowed-keys/{jkt}` → withdraw a pre-registration.
 pub async fn remove_allowed_key(ctx: &ReqCtx, app: &Arc<App>, jkt: &str) -> Result<Resp, ApiError> {
-    authorize(ctx, app)?;
+    let who = crate::admin_auth::authenticate(ctx, app).await?;
     let removed = app.store.delete(&allowed_key_key(jkt)).await?;
     if !removed {
         return Err(ApiError::not_found("not_found", "no such allowed key"));
     }
-    app.audit
-        .emit("allowed_key_removed", serde_json::json!({ "jkt": jkt }));
+    app.audit.emit(
+        "allowed_key_removed",
+        serde_json::json!({ "actor": who.actor, "jkt": jkt }),
+    );
     Ok(empty_status(StatusCode::NO_CONTENT))
 }
 
 /// `GET /admin/agents` → list enrolled agents.
 pub async fn list_agents(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
-    authorize(ctx, app)?;
+    crate::admin_auth::authenticate(ctx, app).await?;
     let entries = app.store.scan_prefix("agent:").await?;
     let agents: Vec<serde_json::Value> = entries
         .iter()
@@ -194,7 +170,7 @@ pub async fn list_agents(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError>
 
 /// `GET /admin/agents/{local}` → one agent.
 pub async fn get_agent(ctx: &ReqCtx, app: &Arc<App>, local: &str) -> Result<Resp, ApiError> {
-    authorize(ctx, app)?;
+    crate::admin_auth::authenticate(ctx, app).await?;
     let rec = load_agent(app, local).await?;
     Ok(json_ok(&serde_json::to_value(rec).unwrap()))
 }
@@ -207,13 +183,13 @@ pub async fn get_agent(ctx: &ReqCtx, app: &Arc<App>, local: &str) -> Result<Resp
 /// audited, but a PS we cannot reach never fails the operation — that access is
 /// then bounded by the token lifetime, exactly as the spec describes.
 pub async fn revoke_agent(ctx: &ReqCtx, app: &Arc<App>, local: &str) -> Result<Resp, ApiError> {
-    authorize(ctx, app)?;
+    let who = crate::admin_auth::authenticate(ctx, app).await?;
     let ps = persist_status(app, local, STATUS_REVOKED).await?;
 
     let outcome = crate::revocation::notify_ps(app, local, ps.as_deref()).await;
     app.audit.emit(
         "agent_revoked",
-        serde_json::json!({ "local": local, "ps_notification": outcome }),
+        serde_json::json!({ "actor": who.actor, "local": local, "ps_notification": outcome }),
     );
     Ok(json_ok(&serde_json::json!({
         "local": local,
@@ -224,10 +200,12 @@ pub async fn revoke_agent(ctx: &ReqCtx, app: &Arc<App>, local: &str) -> Result<R
 
 /// `POST /admin/agents/{local}/reinstate`
 pub async fn reinstate_agent(ctx: &ReqCtx, app: &Arc<App>, local: &str) -> Result<Resp, ApiError> {
-    authorize(ctx, app)?;
+    let who = crate::admin_auth::authenticate(ctx, app).await?;
     persist_status(app, local, STATUS_ACTIVE).await?;
-    app.audit
-        .emit("agent_reinstated", serde_json::json!({ "local": local }));
+    app.audit.emit(
+        "agent_reinstated",
+        serde_json::json!({ "actor": who.actor, "local": local }),
+    );
     Ok(json_ok(
         &serde_json::json!({ "local": local, "status": STATUS_ACTIVE }),
     ))

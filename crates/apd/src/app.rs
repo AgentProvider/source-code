@@ -28,6 +28,9 @@ pub struct App {
     pub agent_metadata_bytes: Vec<u8>,
     pub jwks_bytes: Vec<u8>,
     pub started_at: u64,
+    /// Key resolution for the admin API's identity provider, when enterprise
+    /// SSO is configured. Loaded once at startup so a bad issuer fails fast.
+    pub admin_idp: Option<crate::enrollment::issuer_keys::IssuerRuntime>,
     /// OpenTelemetry metric instruments (no-ops when telemetry is disabled).
     pub metrics: crate::telemetry::Metrics,
 }
@@ -47,6 +50,15 @@ impl App {
             .iter()
             .map(|issuer| IssuerRuntime::load(issuer, cfg.insecure_dev_mode))
             .collect::<Result<Vec<_>, String>>()?;
+        // The admin IdP is a trusted issuer like any other, so it reuses the
+        // same runtime: OIDC discovery, egress admission, key caching.
+        let admin_idp = match &cfg.admin_oidc {
+            Some(o) => Some(IssuerRuntime::load(
+                &crate::config::TrustedIssuer::for_admin_idp(o),
+                cfg.insecure_dev_mode,
+            )?),
+            None => None,
+        };
         let audit = Audit::new(cfg.audit_log_file.as_deref())?;
         Ok(Arc::new(App {
             cfg,
@@ -59,6 +71,7 @@ impl App {
             agent_metadata_bytes,
             jwks_bytes,
             started_at: now_unix(),
+            admin_idp,
             metrics: crate::telemetry::Metrics::new(),
         }))
     }

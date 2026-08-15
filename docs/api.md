@@ -143,9 +143,20 @@ are dropped. Response: `200 {"events":[{"event_token":..,"payload":..,"eid":..,"
 
 ## Admin API (when `admin_token` set)
 
-Bearer-gated: `Authorization: Bearer <admin_token>` (constant-time compared;
-these endpoints are **not** AAuth-signed — front them with your own network/mTLS
-controls). Disabled entirely if no admin token is configured.
+Bearer-gated, and it accepts either credential:
+
+- **A shared token** — `Authorization: Bearer <admin_token>`, constant-time compared.
+- **An identity-provider token** — `Authorization: Bearer <jwt>` from the IdP named
+  in `admin_oidc`. Verified against the IdP's JWKS (discovery, egress-admitted),
+  with `iss`, `aud`, `exp` and a required claim gate. Enterprise SSO for
+  operators: see [configuration.md](configuration.md#admin-api-authentication).
+
+The credential's shape selects the path, so operators need not declare which they
+hold. Every state-changing action records an `actor` — `oidc:alice@acme.example`
+or `static-token` — so an audit can answer who revoked an agent.
+
+These endpoints are **not** AAuth-signed — front them with your own network
+controls. Disabled entirely if neither credential is configured.
 
 - `POST /admin/enrollment-tokens` — `{ "ps"?: url, "label"?: string, "ttl"?: secs }`
   → `201 {"enrollment_token":..,"expires_in":N}` (single-use).

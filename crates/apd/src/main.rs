@@ -7,6 +7,7 @@
 //!   apd example-config               print an example config to stdout
 //!   apd version
 
+mod admin_auth;
 mod app;
 mod audit;
 mod config;
