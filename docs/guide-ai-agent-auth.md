@@ -56,7 +56,14 @@ covered component then the params line, joined with `\n` (no trailing newline):
 Rules that will bite you if you get them wrong:
 
 - `@authority` is the lowercased `Host` (host[:port], default ports elided).
-- `@path` is the path **without** the query string.
+- `@path` is the path **without** the query string. Sign
+  `GET /?scope=openid` as `@path: /`; the query is `@query`, a separate
+  component you may cover or not. Gluing them together is the single easiest
+  mistake to make here, and it fails as `401 invalid_signature` — which reads
+  like a key or clock problem and sends you to check your JWKS, your `kid` and
+  your NTP before you think to look at canonicalization. Both implementations
+  in this ecosystem split path from query before verifying, so a client that
+  gets it wrong fails against every server and learns nothing about why.
 - The `"signature-key"` line value is the full `Signature-Key` header value
   (`sig=...`). Build the header string first, then sign over it.
 - `@signature-params` reproduces your `Signature-Input` inner list **exactly**
@@ -317,7 +324,7 @@ Agents can't receive webhooks, so the AP is your inbox:
 |---|---|
 | `401` `Signature-Error: error=expired_jwt` | refresh your agent token, retry |
 | `401` `error=unsupported_algorithm` + `Accept-Signature-Alg: Ed25519` | sign JOSE/JWK `alg` as the fully-specified `Ed25519`, not `EdDSA`; add `alg="Ed25519"` to your `hwk` |
-| `401` `invalid_signature` | check clock skew, covered components, key match |
+| `401` `invalid_signature` | check clock skew, covered components, key match — and whether you signed the query string into `@path` |
 | `401` `invalid_input; required_input=(…)` | re-sign covering the listed components (e.g. `content-digest`) |
 | `403` `{"error":"denied"}` on a pending URL | user declined — stop |
 | `408` on a pending URL | expired — start the flow over |
