@@ -56,6 +56,13 @@ the reason most people read this file.
 - Two bugs found by live cross-implementation testing against `psd`: egress
   admission now tries every admitted address (a dual-stack host whose first
   address refuses is no longer fatal), and revocation signs its body correctly.
+- **The MCP integration guide taught the pre-11 resource-token shape** — it
+  included `agent`/`agent_jkt` (removed in `-11`) and omitted `ps`, `sub` and
+  `presented_jti` (required), so anyone following it produced a token no Person
+  Server could resolve. Found by live three-party testing.
+- The deployment runbook states the ingress contract independently of
+  ingress-nginx, whose annotations other controllers ignore silently. Names the
+  envoy Gateway 15-second HTTPRoute default that 504s `/inbox` long-polls.
 - Docker builds key their cargo cache mounts per architecture instead of
   serializing on a shared lock, so multi-arch builds stay parallel.
 - The release workflow is idempotent, and `:latest` moves only for a final
