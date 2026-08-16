@@ -215,6 +215,42 @@ Configure the ingress as follows.
 - Set the read timeout to 75 seconds or more. The `/inbox` endpoint holds a connection for up to 50 seconds.
 - Set the maximum body size to 64 KB.
 
+#### If you do not run ingress-nginx
+
+The list above is the contract. `values-sandbox.yaml` expresses it in
+`nginx.ingress.kubernetes.io/*` annotations, and **those annotations are silently
+ignored by every other controller** — they are not rejected, so the deployment
+comes up looking correct with none of the settings applied.
+
+The reference sandbox itself runs APISIX in front of envoy Gateway, not
+ingress-nginx, so this is the common case rather than the exception. Equivalents:
+
+| Requirement | ingress-nginx | Gateway API / envoy |
+|---|---|---|
+| Preserve `Host` | `upstream-vhost` | default; do not add a `URLRewrite` filter |
+| Read timeout ≥ 75 s | `proxy-read-timeout: "75"` | `HTTPRoute.spec.rules[].timeouts.request` |
+| Body size 64 KB | `proxy-body-size: "64k"` | `BackendTrafficPolicy` |
+| Block `/admin/*` | `configuration-snippet` | a route with no backend, matched first |
+
+**Read timeout is the one that fails late.** Envoy Gateway defaults an HTTPRoute
+to a **15-second** request timeout, well under the 50 seconds `/inbox` holds a
+connection. Everything else works; long-polling returns `504` once the agent
+starts waiting, which looks like an apd bug and is not one. Set it before
+enabling events, not after the first report.
+
+Verify the contract holds rather than trusting the configuration:
+
+```sh
+# Host and path arrive unchanged — a signed request is the real test.
+cd tools/aauthcheck && cargo run --release -- --ap https://sandbox.example.com
+
+# Long-poll survives the proxy (only meaningful once events are enabled).
+time curl -sS -o /dev/null -w '%{http_code}\n' \
+  -H 'Prefer: wait=50' https://sandbox.example.com/inbox
+# 401 after ~0 s = reached apd (unsigned, as expected).
+# 504 after ~15 s = the proxy timeout is too low.
+```
+
 ### 6.4 Rate limits
 
 `apd` has no rate limiter. Apply the limits at the ingress.

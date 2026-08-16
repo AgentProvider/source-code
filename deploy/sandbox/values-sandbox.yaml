@@ -100,6 +100,11 @@ ingress:
   tls:
     enabled: true
     secretName: apd-sandbox-tls
+  # NOTE: these annotations are ingress-nginx specific. Every other controller
+  # ignores them silently — nothing is rejected, so the deployment comes up
+  # looking correct with none of them applied. The reference sandbox runs APISIX
+  # in front of envoy Gateway and configures the same contract on the HTTPRoute
+  # instead. See the runbook, "If you do not run ingress-nginx".
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
 
