@@ -190,21 +190,44 @@ same-origin pending URLs ☐ return `AAuth-Access` wrapping your token ☐ requi
 Now you get a real end user behind the agent, without running an IdP. You need
 signing keys (and `jwks_uri` in metadata).
 
-**a. Issue a resource token** when an endpoint needs user authorization — either
-from your `authorization_endpoint` (`{"resource_token":"..."}`) or as a
-challenge `401 AAuth-Requirement: requirement=auth-token; resource-token="eyJ..."`.
+**a. Verify a person token first.** Since AAuth `-11` a resource token is issued
+*from* a person token, not from an agent token. Challenge with
+`401 AAuth-Requirement: requirement=person-token`; the agent presents an
+`aa-person+jwt` in `Signature-Key` in place of its agent token, and you verify it
+against the Person Server's published JWKS.
+
+**b. Issue a resource token** — either from your `authorization_endpoint`
+(`{"resource_token":"..."}`) or as a challenge
+`401 AAuth-Requirement: requirement=auth-token; resource-token="eyJ..."`.
 It's an `aa-resource+jwt` you sign:
 
 ```json
 {
   "iss": "https://mcp.example", "dwk": "aauth-resource.json",
-  "aud": "<the agent token's `ps` claim>",         // three-party: the agent's PS
-  "jti": "…", "agent": "<agent id from its token>",
-  "agent_jkt": "<RFC7638 thumbprint of the agent's current key>",
+  "aud": "<the person token's `iss`>",             // three-party: the agent's PS
+  "jti": "…",
+  "ps": "<iss of the person token you verified>",
+  "sub": "<sub from that person token>",
+  "presented_jti": "<jti of that person token>",
   "iat": …, "exp": "≤ 5 minutes",
   "scope": "tools.read tools.exec"
 }
 ```
+
+**`presented_jti` is what makes the token resolvable.** The Person Server looks
+that `jti` up against its own record of the person token it issued; without it
+you get `400 invalid_resource_token: missing presented_jti` and the exchange
+stops. It is also what makes mission stripping detectable, so it is not
+bookkeeping.
+
+Two ways to get this wrong, both seen in the wild:
+
+- **Carrying `agent` or `agent_jkt`.** Removed in `-11` — a resource token now
+  carries no agent identifier at all. Older examples still show them.
+- **Naming the field `person_token_jti`.** That was its name before `-11`, which
+  renamed it to `presented_jti` with the value unchanged. Emit `presented_jti`.
+  If you are writing a *Person Server*, accept both: real resources still send
+  the old name, and rejecting them buys nothing.
 
 (Four-party: set `aud` to *your* Access Server instead; the flow on your side is
 otherwise identical. Missions are no longer agent-asserted — the `AAuth-Mission`
@@ -212,7 +235,7 @@ header was removed in AAuth `-11`. A mission now reaches you only as the
 `mission_s256` claim inside a PS-issued token, which you copy into the resource
 token you issue.)
 
-**b. Verify the auth token** the agent then presents
+**c. Verify the auth token** the agent then presents
 (`Signature-Key: sig=jwt;jwt="<auth token>"`). Two independent checks:
 
 - *JWT trust:* `typ == "aa-auth+jwt"`; `dwk` ∈ {`aauth-person.json` (PS),
@@ -222,7 +245,7 @@ token you issue.)
   structurally-incomplete `cnf`); `act` chain sane; at least one of `sub`/`scope`
   present; granted `scope` ⊆ what you asked for.
 
-**c. Apply your own policy.** In three-party you trust the *agent's chosen PS* for
+**d. Apply your own policy.** In three-party you trust the *agent's chosen PS* for
 **identity claims only** — you still enforce access. Namespace users by
 `(iss, sub)` (plus `tenant` if present): look up the tuple, create a user record
 on a miss, match on a hit. Registration and login are the same flow — your logic
@@ -232,8 +255,9 @@ expect it to match another service's `sub`.
 You may step up at any time (e.g. return a fresh `requirement=auth-token` with a
 broader scope) even against a valid auth token.
 
-**Checklist — rung 3:** ☐ sign resource tokens (`aud` = agent's `ps`, ≤5 min,
-`agent_jkt` bound) ☐ verify auth tokens (JWT trust + context binding, scope ⊆
+**Checklist — rung 3:** ☐ verify a person token before issuing anything ☐ sign
+resource tokens (`aud` = agent's `ps`, ≤5 min, carrying `ps`/`sub`/`presented_jti`,
+no agent identifier) ☐ verify auth tokens (JWT trust + context binding, scope ⊆
 requested) ☐ key users by `(iss, sub[, tenant])` ☐ enforce your own policy.
 
 ## 6. Optional: emit events to agents (AAuth Events)
