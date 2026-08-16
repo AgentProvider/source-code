@@ -36,6 +36,7 @@ How an agent proves it may have an identity.
 
 ## Operate
 
+- [Changelog](../CHANGELOG.md) — what changed in each release, security fixes called out
 - [Implementation status](STATUS.md) — what is done, what is deliberately absent, and what has never met a real counterparty
 - [Configuration](configuration.md) — every field, environment overrides, storage backends
 - [Identity providers](identity-providers.md) — enterprise SSO for the admin API: Okta, Entra, Google, Keycloak, Auth0
