@@ -36,6 +36,7 @@ How an agent proves it may have an identity.
 
 ## Operate
 
+- [Implementation status](STATUS.md) — what is done, what is deliberately absent, and what has never met a real counterparty
 - [Configuration](configuration.md) — every field, environment overrides, storage backends
 - [Identity providers](identity-providers.md) — enterprise SSO for the admin API: Okta, Entra, Google, Keycloak, Auth0
 - [HTTP API](api.md) — endpoints, request and response shapes, audit events
