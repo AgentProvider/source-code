@@ -112,6 +112,24 @@ of it no live counterparty exists yet.
   Worth recording because I got this wrong twice by probing unauthenticated:
   the resource states its requirements only *after* a signature verifies, so
   what a resource supports is not discoverable without first being someone.
+- **The full three-party chain, observed end to end** — agent → Agent Provider →
+  Person Server → a resource written by neither team. `psd` ran it on
+  2026-08-16, 04:11–04:15 UTC: an auth token minted by `sandbox.personserver.dev`
+  opened `whoami.aauth.dev`, which answered `200` with
+
+  ```json
+  {"iss":"https://sandbox.personserver.dev","sub":"<directed sub>"}
+  ```
+
+  The same directed `sub` appears in the person token, the resource token and the
+  auth token, so the identity survived every hop.
+
+  **Attribution and artefacts:** observed by the psd maintainers, not by apd, and
+  reproduction from their written description is pending. The Person Server was
+  the released `psd:0.2.0`; the Agent Provider was `apd` **0.2.0** — the sandbox
+  had not been rolled, confirmed by `accept_signature_algs` still being absent
+  from its metadata at 04:14 UTC. The apd half of this result therefore belongs
+  to a three-release-old artefact, and will be re-run against `0.5.0`.
 - Cross-implementation conformance against psd: 27/27.
 - The sandbox deployment itself, and every runnable example in the docs.
 
