@@ -53,15 +53,15 @@ This is the section to read before trusting a green test suite. Everything here
 is covered by tests and none of it has met a live counterparty, because for most
 of it no live counterparty exists yet.
 
+- **Everything a resource initiates.** A resource that *accepts* an agent token
+  is verified (below), but no live resource has ever called *into* apd, so the
+  resource-facing half of events is still self-tested.
 - **Events, end to end.** `/subscribe`, `/events`, `/inbox` and
   `DELETE /subscriptions/{eid}` are tested in-process. **No real resource has
   ever delivered an event to apd.** The whole feature has only ever seen traffic
   it generated itself.
 - **Sub-agent tokens.** Issued and tested, but no real resource has ever accepted
   one. Issuance is verified; acceptance is not.
-- **Agent tokens at a real resource.** apd's tokens have never been presented to
-  a live AAuth resource. mcpg.dev supports AAuth as a resource and is the
-  obvious first counterparty; that test has not been run.
 - **Federated enrollment beyond mocks.** The `oidc` method is tested against a
   mock issuer; `x5c` and `spiffe` against synthetic certificates and SVIDs. No
   real Kubernetes projected service-account token, no real SPIFFE workload API,
@@ -82,6 +82,24 @@ of it no live counterparty exists yet.
 - **AP→PS token revocation**, end to end with no mocks, against a real psd —
   twice, including once against the released `psd:0.1.0` container rather than a
   development build.
+- **An independent third-party resource accepting an apd agent token.**
+  `whoami.aauth.dev` — the AAuth Who Am I service, `access_mode: agent-token` —
+  accepts a token issued by the live sandbox and echoes back the identity it
+  sees:
+
+  ```json
+  {"iss":"https://sandbox.agentprovider.dev",
+   "sub":"aauth:5ypvy2pea5w29qbx@sandbox.agentprovider.dev"}
+  ```
+
+  Run it yourself: `cd tools/aauthcheck && cargo run --release --
+  --ap https://sandbox.agentprovider.dev`. This is the strongest evidence here,
+  because the counterparty was written by neither of us and agrees anyway.
+
+  It does **not** exercise auth tokens or resource tokens: `access_mode` is
+  `agent-token`, so no Person Server or Access Server takes part. A resource
+  that challenges for an auth token is still missing, and that is what psd's
+  `/token` path needs.
 - Cross-implementation conformance against psd: 27/27.
 - The sandbox deployment itself, and every runnable example in the docs.
 
@@ -92,11 +110,12 @@ of it no live counterparty exists yet.
 apd is complete for the Agent Provider role as the drafts define it. But
 "complete" and "known to work" are different claims, and the honest summary is:
 
-> **The paths an agent and a Person Server take are verified live. The paths a
-> resource takes are not** — events, sub-agent tokens and token acceptance are
-> tested only against code we wrote, because no live resource has yet spoken
-> AAuth to us.
+> **Agent tokens are verified end to end, including at a resource neither of us
+> wrote.** What remains unverified is everything a resource *initiates* —
+> inbound events, and sub-agent tokens being accepted — because no live resource
+> has yet called into apd.
 
-The cheapest way to shorten section 3 is a real resource. A single live exchange
-with mcpg.dev — agent token presented, accepted, one event delivered back — would
-move three entries out of it at once.
+The cheapest way to shorten section 3 further is a resource that challenges for
+an auth token and delivers an event back. `whoami.aauth.dev` does neither: it is
+`access_mode: agent-token`, which is exactly why it could verify the agent-token
+path so cleanly and cannot touch the rest.
