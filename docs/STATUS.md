@@ -100,6 +100,18 @@ of it no live counterparty exists yet.
   `agent-token`, so no Person Server or Access Server takes part. A resource
   that challenges for an auth token is still missing, and that is what psd's
   `/token` path needs.
+- **The three-party challenge, independently reimplemented.** `aauthcheck
+  --three-party` reproduces leg 1 of the flow psd verified — a `ps`-bearing agent
+  token draws `401 requirement=person-token` from `whoami.aauth.dev`, where an
+  agent token without `ps` is simply served. Written from psd's prose
+  description rather than their code, so agreement is evidence about the
+  protocol rather than about one implementation. Legs 2–5 need a person to
+  approve consent (`--interactive`) and a Person Server carrying the
+  `person_token_jti` alias.
+
+  Worth recording because I got this wrong twice by probing unauthenticated:
+  the resource states its requirements only *after* a signature verifies, so
+  what a resource supports is not discoverable without first being someone.
 - Cross-implementation conformance against psd: 27/27.
 - The sandbox deployment itself, and every runnable example in the docs.
 
